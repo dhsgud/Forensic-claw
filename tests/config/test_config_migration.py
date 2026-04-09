@@ -89,10 +89,10 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
         json.dumps(
             {
                 "channels": {
-                    "qq": {
+                    "kakaotalk": {
                         "enabled": False,
-                        "appId": "",
-                        "secret": "",
+                        "host": "0.0.0.0",
+                        "port": 3000,
                         "allowFrom": [],
                     }
                 }
@@ -106,13 +106,13 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "nanobot.channels.registry.discover_all",
         lambda: {
-            "qq": SimpleNamespace(
+            "kakaotalk": SimpleNamespace(
                 default_config=lambda: {
                     "enabled": False,
-                    "appId": "",
-                    "secret": "",
+                    "host": "0.0.0.0",
+                    "port": 3000,
                     "allowFrom": [],
-                    "msgFormat": "plain",
+                    "pairingCode": "CHANGE_ME",
                 }
             )
         },
@@ -125,4 +125,4 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
 
     assert result.exit_code == 0
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["channels"]["qq"]["msgFormat"] == "plain"
+    assert saved["channels"]["kakaotalk"]["pairingCode"] == "CHANGE_ME"

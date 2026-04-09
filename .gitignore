@@ -26,3 +26,5 @@ uv.lock
 *.E01
 *.E0?
 *.dd
+*.md
+!/README.md

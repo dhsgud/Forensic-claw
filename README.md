@@ -1,4 +1,8 @@
-# Forensic-claw
+# Forensic-Claw
+
+<div align="center">
+  <img src="forensic_claw_logo.png" alt="Forensic-Claw Logo" width="400">
+</div>
 
 로컬 LLM 기반의 경량 에이전트 프레임워크입니다. 현재 이 저장소는 `Discord`와 `KakaoTalk` 채널, 그리고 `vLLM` 또는 `Custom OpenAI-compatible endpoint (llama.cpp 등)`만 지원하도록 정리되어 있습니다.
 

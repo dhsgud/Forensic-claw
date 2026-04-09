@@ -331,10 +331,9 @@ def onboard(
         console.print(f"  1. Chat: [cyan]{agent_cmd}[/cyan]")
         console.print(f"  2. Start gateway: [cyan]{gateway_cmd}[/cyan]")
     else:
-        console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
-        console.print("     Get one at: https://openrouter.ai/keys")
+        console.print(f"  1. Configure [cyan]providers.vllm[/cyan] or [cyan]providers.custom[/cyan] in {config_path}")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
-    console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]")
+    console.print("\n[dim]Supported chat channels in this build: Discord, KakaoTalk[/dim]")
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -390,48 +389,24 @@ def _make_provider(config: Config):
     backend = spec.backend if spec else "openai_compat"
 
     # --- validation ---
-    if backend == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.nanobot/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-    elif backend == "openai_compat" and not model.startswith("bedrock/"):
+    if backend == "openai_compat":
         needs_key = not (p and p.api_key)
-        exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
+        exempt = spec and (spec.is_local or spec.is_direct)
         if needs_key and not exempt:
             console.print("[red]Error: No API key configured.[/red]")
             console.print("Set one in ~/.nanobot/config.json under providers section")
             raise typer.Exit(1)
 
     # --- instantiation by backend ---
-    if backend == "openai_codex":
-        from nanobot.providers.openai_codex_provider import OpenAICodexProvider
-        provider = OpenAICodexProvider(default_model=model)
-    elif backend == "azure_openai":
-        from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
-        provider = AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
-            default_model=model,
-        )
-    elif backend == "anthropic":
-        from nanobot.providers.anthropic_provider import AnthropicProvider
-        provider = AnthropicProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-        )
-    else:
-        from nanobot.providers.openai_compat_provider import OpenAICompatProvider
-        provider = OpenAICompatProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            spec=spec,
-        )
+    from nanobot.providers.openai_compat_provider import OpenAICompatProvider
+
+    provider = OpenAICompatProvider(
+        api_key=p.api_key if p else None,
+        api_base=config.get_api_base(model),
+        default_model=model,
+        extra_headers=p.extra_headers if p else None,
+        spec=spec,
+    )
 
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(
@@ -1025,7 +1000,7 @@ def _get_bridge_dir() -> Path:
 
 @channels_app.command("login")
 def channels_login(
-    channel_name: str = typer.Argument(..., help="Channel name (e.g. weixin, whatsapp)"),
+    channel_name: str = typer.Argument(..., help="Channel name (e.g. discord, kakaotalk)"),
     force: bool = typer.Option(False, "--force", "-f", help="Force re-authentication even if already logged in"),
 ):
     """Authenticate with a channel via QR code or other interactive login."""
@@ -1157,25 +1132,21 @@ def _register_login(name: str):
 
 @provider_app.command("login")
 def provider_login(
-    provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
+    provider: str = typer.Argument(..., help="Provider name"),
 ):
-    """Authenticate with an OAuth provider."""
+    """Authentication is not used in the local-only provider set."""
     from nanobot.providers.registry import PROVIDERS
 
     key = provider.replace("-", "_")
     spec = next((s for s in PROVIDERS if s.name == key and s.is_oauth), None)
     if not spec:
         names = ", ".join(s.name.replace("_", "-") for s in PROVIDERS if s.is_oauth)
-        console.print(f"[red]Unknown OAuth provider: {provider}[/red]  Supported: {names}")
+        supported = names or "(none)"
+        console.print(f"[red]OAuth login is unavailable in this build.[/red]  Supported: {supported}")
         raise typer.Exit(1)
 
-    handler = _LOGIN_HANDLERS.get(spec.name)
-    if not handler:
-        console.print(f"[red]Login not implemented for {spec.label}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
-    handler()
+    console.print(f"[red]Login is not available for {spec.label} in this build.[/red]")
+    raise typer.Exit(1)
 
 
 @_register_login("openai_codex")
