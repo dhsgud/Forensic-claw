@@ -1,0 +1,196 @@
+--- PAGE 1 ---
+2 0 2 1 4 5 8 8김 동 한| 캡 스 톤프 로 젝 트주제 발표
+F o r e n s i c - c l a w
+포렌식 자동화 프레임워크
++ RansomwareTracer
+2026.04 ~ 2027.12    |    단독 개발
+
+
+--- PAGE 2 ---
+목차
+01 문제 정의
+기존 도구의 한계
+02 Forensic-claw 개요
+아키텍처 + 핵심 기술
+03 Forensic-claw 구성1
+수집 레이어 구성
+04 Forensic-claw 구성2
+관계 그래프 & 지식 베이스
+05 예상되는 문제와 해결 방안
+3중 안전장치 + 신뢰도 등급
+06 향후 발전 방향
+특화 모듈 공격 체인 재구성
+07 평가 & 일정
+검증 방법론 + WBS
+
+--- PAGE 3 ---
+01
+문제정의
+기존 도구의 구조적 한계 — 왜 새로운 프레임워크가 필요한가
+winforensics-mcp
+수집만가능 아티팩트간관계분석없음— 단순열거에그침
+OpenClaw 포렌식
+외부API 및증거검증無 증거클라우드전송→ 증거유출위험, 법정증거능력훼손
+LLM 자동화 도구
+근거추적불가 출처없는분석결과→ 법정제출불가, 신뢰성없음
+범용 LLM 도구
+할루시네이션검증無 허위사실생성탐지체계전무→ 수사오류위험
+해외 포렌식 도구
+한국환경미지원 CP949·NPKI·HWP 아티팩트·검찰청양식처리불가
+
+--- PAGE 4 ---
+02
+Forensic-claw 개요
+완전 로컬 처리 파이프라인 — 외부 API 無, 증거 유출 無
+INPUT
+Windows 디스크이미
+지
+메모리덤프
+MCP LAYER
+12종도구수집
+Evidence Object 생성
+GRAPH DB
+Neo4j 관계그래프
+RAG 벡터지식베이스
+LLM ENGINE
+Qwen3.5 35B – 4bit
+llama.cpp 로컬서빙
+DETECTOR
+HallucinationDetector
+신뢰도등급부여
+OUTPUT
+한국어포렌식리포트
+HTML / PDF
+01 02 03 04 05 06
+STACK:  NanoBot (Python)  |  winforensics-mcp  |  Qwen3.5 30B Q4_K_M / llama.cpp  |  Neo4j + RAG  |  Volatility3
+
+
+--- PAGE 5 ---
+03
+Forensic-claw 구성안(MCP tool 12종)
+Win Artifacts  ×6
+system_info
+prefetch
+registry
+eventlog
+LNK / JumpList
+SRUM + MFT
+Volatility3  ×3
+pstree  — 프로세스 트리
+netscan  — 네트워크 연결
+malfind  — 악성 메모리 탐지
+Korea-specific  ×3
+CP949  자동 디코딩
+NPKI  공인인증서 분석
+HWP  아티팩트 파싱
+각 Tool → Evidence Object 생성 { source, timestamp, hash_verified }  →  Neo4j 그래프 저장
+
+--- PAGE 6 ---
+04
+Forensic-claw 구성안(Neo4j + RAG)
+아티팩트 관계 자동 구축 + 포렌식 지식 베이스
+Process
+File
+Network
+Registry
+EventLog
+[:OPENED] [:FROM]
+(Process)-[:OPENED]→(File)-[:FROM]→(Network)
+RAG 지식 베이스
+MITRE ATT&CK
+Windows Event ID
+악성 패턴 DB
+벡터 인덱스 검색
+
+--- PAGE 7 ---
+05
+할루시네이션방지+ 신뢰도등급
+1단계
+LLM 역할 제한
+서술만 수행 — 근거 없으면 생성 불가
+입력 데이터 없이 추론 차단
+2단계
+Evidence Object 구조체
+{ source, timestamp, hash_verified 
+}
+세 필드 모두 없으면 LLM 입력 차단
+3단계
+HallucinationDetector
+출처 누락 / 타임스탬프 불일치 / 미확인
+경로
+자동 탐지 → FLAGGED 등급
+신뢰도 등급 시스템
+VERIFIED
+2개+ 아티팩트교차확인
+법정 제출 가능
+PARTIAL
+1개아티팩트확인
+추가 확인 권고
+FLAGGED
+출처불일치or Detector 감지
+수사관 검토 필수
+UNVERIFIED
+해시검증실패
+증거 능력 의심
+
+--- PAGE 8 ---
+06
+향후발전방향(RansomwareTracer)
+랜섬웨어 공격 체인 전체 타임라인 자동 재구성
+STEP 1 최초실행탐지 Prefetch + EventLog 4688
+STEP 2 프로세스체인 Volatility pstree + malfind
+STEP 3 파일암호화타임라인 MFT + USN Journal
+STEP 4 C2 통신흔적 netscan + SRUM + IDA Python Script
+STEP 5 공격체인그래프화 Neo4j 시각화
+최종 산출물: Neo4j 공격 체인 그래프 + 시간 순서 타임라인 + 한국어 포렌식 리포트
+
+--- PAGE 9 ---
+07
+평가& 개발일정
+정량 평가 지표
+할루시네이션율 < 2%
+출처 완결율 > 98%
+타임라인 정확도 100%
+비교 대상 vs Autopsy  
+(Precision/Recall/F1)
+케이스 스터디
+Case A 내부자 자료 유출 시나리오
+Case B 랜섬웨어 감염 시나리오 (향후 계획 예정)
+정성 평가 블라인드 전문가 3인+ 5점 척도로 진행
+사실성 / 근거 / 논리 / 법적완결성 / 가독성
+WBS 일정
+Planning
+Environment
+Win Artifacts
+Volatility3
+Korea-specific
+Neo4j + RAG
+RansomwareTracer
+LLM Analysis
+Report Engine
+Validation
+3
+월
+4
+월
+5
+월
+6
+월
+7
+월
+8
+월
+9
+월
+10
+월
+11
+월
+12
+월
+13
+월
+
+--- PAGE 10 ---
+Q&A
