@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from nanobot.cli.commands import _make_provider, app
-from nanobot.config.schema import Config
-from nanobot.providers.registry import PROVIDERS, find_by_name
+from forensic_claw.cli.commands import _make_provider, app
+from forensic_claw.config.schema import Config
+from forensic_claw.providers.registry import PROVIDERS, find_by_name
 
 runner = CliRunner()
 
@@ -52,7 +52,7 @@ def test_make_provider_passes_extra_headers_to_custom_provider() -> None:
         }
     )
 
-    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
+    with patch("forensic_claw.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
         _make_provider(config)
 
     kwargs = mock_async_openai.call_args.kwargs
@@ -65,17 +65,17 @@ def test_onboard_fresh_install_mentions_local_providers(tmp_path, monkeypatch):
     config_file = base_dir / "config.json"
     workspace_dir = base_dir / "workspace"
 
-    monkeypatch.setattr("nanobot.config.loader.get_config_path", lambda: config_file)
-    monkeypatch.setattr("nanobot.cli.commands.get_workspace_path", lambda _workspace=None: workspace_dir)
-    monkeypatch.setattr("nanobot.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("forensic_claw.config.loader.get_config_path", lambda: config_file)
+    monkeypatch.setattr("forensic_claw.cli.commands.get_workspace_path", lambda _workspace=None: workspace_dir)
+    monkeypatch.setattr("forensic_claw.channels.registry.discover_all", lambda: {})
 
     def _save_config(config: Config, config_path: Path | None = None):
         target = config_path or config_file
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(config.model_dump(by_alias=True)), encoding="utf-8")
 
-    monkeypatch.setattr("nanobot.config.loader.save_config", _save_config)
-    monkeypatch.setattr("nanobot.config.loader.load_config", lambda _config_path=None: Config())
+    monkeypatch.setattr("forensic_claw.config.loader.save_config", _save_config)
+    monkeypatch.setattr("forensic_claw.config.loader.load_config", lambda _config_path=None: Config())
 
     result = runner.invoke(app, ["onboard"])
 

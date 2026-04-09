@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from nanobot.bus.events import OutboundMessage
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.kakaotalk import KakaoTalkChannel
+from forensic_claw.bus.events import OutboundMessage
+from forensic_claw.bus.queue import MessageBus
+from forensic_claw.channels.kakaotalk import KakaoTalkChannel
 
 
 def _make_request(payload: dict, headers: dict[str, str] | None = None):
@@ -18,7 +18,7 @@ def _make_request(payload: dict, headers: dict[str, str] | None = None):
 
 
 def test_pair_command_persists_user(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("nanobot.channels.kakaotalk.get_runtime_subdir", lambda _name: tmp_path)
+    monkeypatch.setattr("forensic_claw.channels.kakaotalk.get_runtime_subdir", lambda _name: tmp_path)
 
     channel = KakaoTalkChannel(
         {"enabled": True, "allowFrom": [], "pairingCode": "secret"},
@@ -35,7 +35,7 @@ def test_pair_command_persists_user(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_skill_request_publishes_bus_message_and_returns_callback_ack(tmp_path, monkeypatch):
-    monkeypatch.setattr("nanobot.channels.kakaotalk.get_runtime_subdir", lambda _name: tmp_path)
+    monkeypatch.setattr("forensic_claw.channels.kakaotalk.get_runtime_subdir", lambda _name: tmp_path)
     bus = MessageBus()
     channel = KakaoTalkChannel({"enabled": True, "allowFrom": ["*"]}, bus)
 
@@ -62,7 +62,7 @@ async def test_skill_request_publishes_bus_message_and_returns_callback_ack(tmp_
 
 @pytest.mark.asyncio
 async def test_send_posts_callback_payload(tmp_path, monkeypatch):
-    monkeypatch.setattr("nanobot.channels.kakaotalk.get_runtime_subdir", lambda _name: tmp_path)
+    monkeypatch.setattr("forensic_claw.channels.kakaotalk.get_runtime_subdir", lambda _name: tmp_path)
     channel = KakaoTalkChannel({"enabled": True, "allowFrom": ["*"]}, MessageBus())
 
     seen: dict[str, object] = {}

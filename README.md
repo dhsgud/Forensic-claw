@@ -35,6 +35,15 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - cron
 - heartbeat
 
+## 계획 문서
+
+- [Native Windows Support Plan](docs/NATIVE_WINDOWS_SUPPORT_PLAN.md)
+- [Local Web UI Forensic Workbench Plan](docs/LOCAL_WEB_UI_FORENSIC_WORKBENCH_PLAN.md)
+- [Karpathy 스타일 포렌식 위키 스킬](docs/KARPATHY_FORENSIC_WIKI_SKILL.md)
+- [Windows Forensic Automation Plan](docs/WINDOWS_FORENSIC_AUTOMATION_PLAN.md)
+- [Windows Artifact MCP Overview](docs/WINDOWS_ARTIFACT_MCP_OVERVIEW.md)
+- [Windows Artifact Integration Strategy](docs/WINDOWS_ARTIFACT_INTEGRATION_STRATEGY.md)
+
 ## 설치
 
 Python 3.11+ 환경에서 설치합니다.
@@ -54,13 +63,13 @@ pip install .
 ### 1. 초기 설정 파일 생성
 
 ```bash
-nanobot onboard
+forensic-claw onboard
 ```
 
 또는 대화형 설정:
 
 ```bash
-nanobot onboard --wizard
+forensic-claw onboard --wizard
 ```
 
 ### 2. 기본 설정
@@ -68,7 +77,7 @@ nanobot onboard --wizard
 설정 파일 경로:
 
 ```text
-~/.nanobot/config.json
+~/.forensic-claw/config.json
 ```
 
 기본 설정 예시:
@@ -77,7 +86,7 @@ nanobot onboard --wizard
 {
   "agents": {
     "defaults": {
-      "workspace": "~/.nanobot/workspace",
+      "workspace": "~/.forensic-claw/workspace",
       "model": "qwen1.5-35b-4bit",
       "provider": "vllm",
       "maxTokens": 8192,
@@ -102,13 +111,13 @@ nanobot onboard --wizard
 ### 3. CLI에서 바로 실행
 
 ```bash
-nanobot agent
+forensic-claw agent
 ```
 
 ### 4. 채널 게이트웨이 실행
 
 ```bash
-nanobot gateway
+forensic-claw gateway
 ```
 
 ## 프로바이더 설정
@@ -313,14 +322,14 @@ GET /health
 ## CLI 명령어
 
 ```bash
-nanobot --help
-nanobot onboard
-nanobot gateway
-nanobot agent
-nanobot status
-nanobot channels status
-nanobot channels login discord
-nanobot channels login kakaotalk
+forensic-claw --help
+forensic-claw onboard
+forensic-claw gateway
+forensic-claw agent
+forensic-claw status
+forensic-claw channels status
+forensic-claw channels login discord
+forensic-claw channels login kakaotalk
 ```
 
 메모:
@@ -344,7 +353,7 @@ python -m pytest tests -q
 ## 프로젝트 구조
 
 ```text
-nanobot/
+forensic_claw/
 ├── agent/
 ├── bus/
 ├── channels/

@@ -62,7 +62,7 @@ OUTPUT
 한국어포렌식리포트
 HTML / PDF
 01 02 03 04 05 06
-STACK:  NanoBot (Python)  |  winforensics-mcp  |  Qwen3.5 30B Q4_K_M / llama.cpp  |  Neo4j + RAG  |  Volatility3
+STACK:  Forensic-Claw (Python)  |  winforensics-mcp  |  Qwen3.5 30B Q4_K_M / llama.cpp  |  Neo4j + RAG  |  Volatility3
 
 
 --- PAGE 5 ---

@@ -12,11 +12,11 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, Field
 
-from nanobot.cli import onboard as onboard_wizard
+from forensic_claw.cli import onboard as onboard_wizard
 
 # Import functions to test
-from nanobot.cli.commands import _merge_missing_defaults
-from nanobot.cli.onboard import (
+from forensic_claw.cli.commands import _merge_missing_defaults
+from forensic_claw.cli.onboard import (
     _BACK_PRESSED,
     _configure_pydantic_model,
     _format_value,
@@ -24,8 +24,8 @@ from nanobot.cli.onboard import (
     _get_field_type_info,
     run_onboard,
 )
-from nanobot.config.schema import Config
-from nanobot.utils.helpers import sync_workspace_templates
+from forensic_claw.config.schema import Config
+from forensic_claw.utils.helpers import sync_workspace_templates
 
 
 class TestMergeMissingDefaults:
@@ -352,14 +352,14 @@ class TestProviderChannelInfo:
     """Tests for provider and channel info retrieval."""
 
     def test_get_provider_names_returns_dict(self):
-        from nanobot.cli.onboard import _get_provider_names
+        from forensic_claw.cli.onboard import _get_provider_names
 
         names = _get_provider_names()
         assert isinstance(names, dict)
         assert names == {"custom": "Custom (llama.cpp)", "vllm": "vLLM/Local"}
 
     def test_get_channel_names_returns_dict(self):
-        from nanobot.cli.onboard import _get_channel_names
+        from forensic_claw.cli.onboard import _get_channel_names
 
         names = _get_channel_names()
         assert isinstance(names, dict)
@@ -367,7 +367,7 @@ class TestProviderChannelInfo:
         assert len(names) >= 0
 
     def test_get_provider_info_returns_valid_structure(self):
-        from nanobot.cli.onboard import _get_provider_info
+        from forensic_claw.cli.onboard import _get_provider_info
 
         info = _get_provider_info()
         assert isinstance(info, dict)

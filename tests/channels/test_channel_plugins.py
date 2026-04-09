@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from nanobot.bus.events import OutboundMessage
-from nanobot.bus.queue import MessageBus
-from nanobot.channels.base import BaseChannel
-from nanobot.channels.manager import ChannelManager
-from nanobot.config.schema import ChannelsConfig
+from forensic_claw.bus.events import OutboundMessage
+from forensic_claw.bus.queue import MessageBus
+from forensic_claw.channels.base import BaseChannel
+from forensic_claw.channels.manager import ChannelManager
+from forensic_claw.config.schema import ChannelsConfig
 
 
 class _FakePlugin(BaseChannel):
@@ -34,7 +34,7 @@ def _make_entry_point(name: str, cls: type):
 
 
 def test_discover_all_includes_supported_builtins():
-    from nanobot.channels.registry import discover_all
+    from forensic_claw.channels.registry import discover_all
 
     with patch("importlib.metadata.entry_points", return_value=[]):
         result = discover_all()
@@ -53,7 +53,7 @@ async def test_manager_loads_plugin_from_dict_config():
         ),
     )
 
-    with patch("nanobot.channels.registry.discover_all", return_value={"fakeplugin": _FakePlugin}):
+    with patch("forensic_claw.channels.registry.discover_all", return_value={"fakeplugin": _FakePlugin}):
         mgr = ChannelManager.__new__(ChannelManager)
         mgr.config = fake_config
         mgr.bus = MessageBus()
@@ -94,7 +94,7 @@ async def test_send_with_retry_retries_on_failure():
 
     msg = OutboundMessage(channel="failing", chat_id="123", content="test")
 
-    with patch("nanobot.channels.manager.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    with patch("forensic_claw.channels.manager.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         await mgr._send_with_retry(mgr.channels["failing"], msg)
 
     assert call_count == 3

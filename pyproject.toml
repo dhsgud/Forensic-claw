@@ -1,12 +1,12 @@
 [project]
-name = "nanobot-ai"
+name = "forensic-claw"
 version = "0.1.4.post5"
-description = "A lightweight personal AI assistant framework"
+description = "A local forensic agent framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "nanobot contributors"}
+    {name = "Forensic-Claw contributors"}
 ]
 keywords = ["ai", "agent", "chatbot"]
 classifiers = [
@@ -49,7 +49,7 @@ dev = [
 ]
 
 [project.scripts]
-nanobot = "nanobot.cli.commands:app"
+forensic-claw = "forensic_claw.cli.commands:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -60,21 +60,21 @@ allow-direct-references = true
 
 [tool.hatch.build]
 include = [
-    "nanobot/**/*.py",
-    "nanobot/templates/**/*.md",
-    "nanobot/skills/**/*.md",
-    "nanobot/skills/**/*.sh",
+    "forensic_claw/**/*.py",
+    "forensic_claw/templates/**/*.md",
+    "forensic_claw/skills/**/*.md",
+    "forensic_claw/skills/**/*.sh",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["nanobot"]
+packages = ["forensic_claw"]
 
 [tool.hatch.build.targets.wheel.sources]
-"nanobot" = "nanobot"
+"forensic_claw" = "forensic_claw"
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "nanobot/",
+    "forensic_claw/",
     "README.md",
     "LICENSE",
 ]
@@ -92,7 +92,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["nanobot"]
+source = ["forensic_claw"]
 omit = ["tests/*", "**/tests/*"]
 
 [tool.coverage.report]
