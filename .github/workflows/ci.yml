@@ -1,10 +1,12 @@
 name: Test Suite
 
 on:
-  push:
-    branches: [ main, nightly ]
-  pull_request:
-    branches: [ main, nightly ]
+  # push:
+  #   branches: [ main, nightly ]
+  # pull_request:
+  #   branches: [ main, nightly ]
+  workflow_dispatch: # 수동 실행만 가능하도록 변경
+
 
 jobs:
   test:

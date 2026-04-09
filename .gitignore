@@ -15,6 +15,7 @@ build/
 *.pywz
 *.pyzz
 .venv/
+.venv_rembg/
 venv/
 __pycache__/
 poetry.lock
@@ -26,3 +27,5 @@ uv.lock
 *.E01
 *.E0?
 *.dd
+*.md
+!/README.md

@@ -301,7 +301,10 @@ class WebFetchTool(Tool):
 
     async def _fetch_readability(self, url: str, extract_mode: str, max_chars: int) -> Any:
         """Local fallback using readability-lxml."""
-        from readability import Document
+        try:
+            from readability import Document
+        except ImportError:
+            Document = None
 
         try:
             async with httpx.AsyncClient(
@@ -325,10 +328,17 @@ class WebFetchTool(Tool):
             if "application/json" in ctype:
                 text, extractor = json.dumps(r.json(), indent=2, ensure_ascii=False), "json"
             elif "text/html" in ctype or r.text[:256].lower().startswith(("<!doctype", "<html")):
-                doc = Document(r.text)
-                content = self._to_markdown(doc.summary()) if extract_mode == "markdown" else _strip_tags(doc.summary())
-                text = f"# {doc.title()}\n\n{content}" if doc.title() else content
-                extractor = "readability"
+                if Document is not None:
+                    doc = Document(r.text)
+                    summary = doc.summary()
+                    title = doc.title()
+                    extractor = "readability"
+                else:
+                    summary = r.text
+                    title = ""
+                    extractor = "html"
+                content = self._to_markdown(summary) if extract_mode == "markdown" else _strip_tags(summary)
+                text = f"# {title}\n\n{content}" if title else content
             else:
                 text, extractor = r.text, "raw"
 
