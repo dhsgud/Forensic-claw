@@ -15,6 +15,7 @@ build/
 *.pywz
 *.pyzz
 .venv/
+.venv_rembg/
 venv/
 __pycache__/
 poetry.lock
