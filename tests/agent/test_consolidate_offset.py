@@ -591,6 +591,29 @@ class TestNewCommandArchival:
         assert loop.sessions.get_or_create("cli:test").messages == []
 
     @pytest.mark.asyncio
+    async def test_reset_alias_clears_session_and_responds(self, tmp_path: Path) -> None:
+        from forensic_claw.bus.events import InboundMessage
+
+        loop = self._make_loop(tmp_path)
+        session = loop.sessions.get_or_create("cli:test")
+        for i in range(3):
+            session.add_message("user", f"msg{i}")
+            session.add_message("assistant", f"resp{i}")
+        loop.sessions.save(session)
+
+        async def _ok_consolidate(_messages) -> bool:
+            return True
+
+        loop.memory_consolidator.consolidate_messages = _ok_consolidate  # type: ignore[method-assign]
+
+        reset_msg = InboundMessage(channel="cli", sender_id="user", chat_id="test", content="/reset")
+        response = await loop._process_message(reset_msg)
+
+        assert response is not None
+        assert "new session started" in response.content.lower()
+        assert loop.sessions.get_or_create("cli:test").messages == []
+
+    @pytest.mark.asyncio
     async def test_close_mcp_drains_background_tasks(self, tmp_path: Path) -> None:
         """close_mcp waits for background tasks to complete."""
         from forensic_claw.bus.events import InboundMessage

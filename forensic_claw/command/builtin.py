@@ -87,6 +87,7 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     lines = [
         "🐈 forensic-claw commands:",
         "/new — Start a new conversation",
+        "/reset — Alias for /new",
         "/stop — Stop the current task",
         "/restart — Restart the bot",
         "/status — Show bot status",
@@ -106,5 +107,6 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
     router.exact("/new", cmd_new)
+    router.exact("/reset", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/help", cmd_help)

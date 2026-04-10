@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -293,7 +294,7 @@ class DiscordChannel(BaseChannel):
 
         sender_id = str(author.get("id", ""))
         channel_id = str(payload.get("channel_id", ""))
-        content = payload.get("content") or ""
+        content = self._normalize_inbound_content(payload.get("content") or "")
         guild_id = payload.get("guild_id")
 
         if not sender_id or not channel_id:
@@ -347,6 +348,14 @@ class DiscordChannel(BaseChannel):
                 "reply_to": reply_to,
             },
         )
+
+    def _normalize_inbound_content(self, content: str) -> str:
+        """Trim a leading self-mention so exact slash commands still work in guild chats."""
+        if not self._bot_user_id or not content:
+            return content
+
+        pattern = rf"^(?:<@!?{re.escape(self._bot_user_id)}>\s*)+"
+        return re.sub(pattern, "", content).strip()
 
     def _should_respond_in_group(self, payload: dict[str, Any], content: str) -> bool:
         """Check if bot should respond in a group channel based on policy."""

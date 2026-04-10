@@ -121,6 +121,7 @@ class TestRestartCommand:
 
         assert response is not None
         assert "/restart" in response.content
+        assert "/reset" in response.content
         assert "/status" in response.content
         assert response.metadata == {"render_as": "text"}
 
