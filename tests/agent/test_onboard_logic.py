@@ -489,3 +489,106 @@ class TestRunOnboardExitBehavior:
 
         assert result.should_save is False
         assert result.config.model_dump(by_alias=True) == initial_config.model_dump(by_alias=True)
+
+
+class _TestChannelConfig(BaseModel):
+    enabled: bool = False
+    token: str = ""
+
+
+class TestWizardSelections:
+    def test_configure_providers_sets_default_provider_and_prompts_model(self, monkeypatch):
+        config = Config()
+        calls: list[str] = []
+
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_select_provider_name",
+            lambda *_args, **_kwargs: "custom",
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_configure_provider",
+            lambda cfg, provider_name: calls.append(f"provider:{provider_name}"),
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_select_model_for_provider",
+            lambda *_args, **_kwargs: "llama.cpp/local",
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_try_auto_fill_context_window",
+            lambda *_args, **_kwargs: calls.append("model:model"),
+        )
+        monkeypatch.setattr(onboard_wizard.console, "clear", lambda: None)
+        monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *_args, **_kwargs: None)
+
+        onboard_wizard._configure_providers(config)
+
+        assert config.agents.defaults.provider == "custom"
+        assert config.agents.defaults.model == "llama.cpp/local"
+        assert calls == ["provider:custom", "model:model"]
+
+    def test_configure_channels_enables_selected_channels(self, monkeypatch):
+        config = Config()
+        configured: list[str] = []
+
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_names",
+            lambda: {"discord": "Discord", "kakaotalk": "KakaoTalk"},
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_config_class",
+            lambda _name: _TestChannelConfig,
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_prompt_enabled_channels",
+            lambda _config: ["discord"],
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_configure_channel",
+            lambda _config, channel_name: configured.append(channel_name),
+        )
+        monkeypatch.setattr(onboard_wizard.console, "clear", lambda: None)
+        monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *_args, **_kwargs: None)
+
+        onboard_wizard._configure_channels(config)
+
+        assert config.channels.discord["enabled"] is True
+        assert config.channels.kakaotalk["enabled"] is False
+        assert configured == ["discord"]
+
+    def test_configure_channels_applies_discord_allow_all_default(self, monkeypatch):
+        config = Config()
+
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_names",
+            lambda: {"discord": "Discord"},
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_config_class",
+            lambda _name: _TestChannelConfig,
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_prompt_enabled_channels",
+            lambda _config: ["discord"],
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_configure_channel",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(onboard_wizard.console, "clear", lambda: None)
+        monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *_args, **_kwargs: None)
+
+        onboard_wizard._configure_channels(config)
+
+        assert config.channels.discord["allowFrom"] == ["*"]

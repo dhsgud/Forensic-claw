@@ -408,6 +408,16 @@ async def test_exec_timeout_capped_at_max() -> None:
     assert "Exit code: 0" in result
 
 
+async def test_exec_decodes_cp949_stdout() -> None:
+    """ExecTool should decode common Windows encodings like CP949."""
+    tool = ExecTool()
+    result = await tool.execute(
+        command='python -c "import sys; sys.stdout.buffer.write(\'안녕\'.encode(\'cp949\'))"'
+    )
+    assert "안녕" in result
+    assert "Exit code: 0" in result
+
+
 # --- _resolve_type and nullable param tests ---
 
 

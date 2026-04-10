@@ -1,14 +1,14 @@
 """Utility functions for forensic-claw."""
 
 import base64
+import importlib
 import json
 import re
 import time
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
-import tiktoken
 
 
 def strip_think(text: str) -> str:
@@ -76,10 +76,157 @@ def current_time_str(timezone: str | None = None) -> str:
 
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
+_ASCII_TOKEN_CHUNK = 4
+
 
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
     return _UNSAFE_CHARS.sub("_", name).strip()
+
+
+def _is_cjk_like(ch: str) -> bool:
+    """Return whether *ch* is commonly tokenized as a standalone wide glyph."""
+    code = ord(ch)
+    return (
+        0x1100 <= code <= 0x11FF  # Hangul Jamo
+        or 0x2E80 <= code <= 0x2EFF  # CJK Radicals Supplement
+        or 0x2F00 <= code <= 0x2FDF  # Kangxi Radicals
+        or 0x2FF0 <= code <= 0x2FFF  # Ideographic Description Characters
+        or 0x3000 <= code <= 0x303F  # CJK Symbols and Punctuation
+        or 0x3040 <= code <= 0x30FF  # Hiragana / Katakana
+        or 0x3130 <= code <= 0x318F  # Hangul Compatibility Jamo
+        or 0x31A0 <= code <= 0x31BF  # Bopomofo Extended
+        or 0x31C0 <= code <= 0x31EF  # CJK Strokes
+        or 0x3400 <= code <= 0x4DBF  # CJK Unified Ideographs Extension A
+        or 0x4E00 <= code <= 0x9FFF  # CJK Unified Ideographs
+        or 0xAC00 <= code <= 0xD7A3  # Hangul Syllables
+        or 0xF900 <= code <= 0xFAFF  # CJK Compatibility Ideographs
+        or 0xFE30 <= code <= 0xFE4F  # CJK Compatibility Forms
+        or 0xFF00 <= code <= 0xFFEF  # Halfwidth and Fullwidth Forms
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_tiktoken_encoding():
+    """Best-effort optional tiktoken loader."""
+    try:
+        tiktoken = importlib.import_module("tiktoken")
+    except Exception:
+        return None
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
+
+
+def _estimate_text_tokens_native(text: str) -> int:
+    """Approximate token count without external tokenizer dependencies."""
+    total = 0
+    idx = 0
+    while idx < len(text):
+        ch = text[idx]
+        if ch.isspace():
+            idx += 1
+            continue
+        if ch.isascii() and (ch.isalnum() or ch == "_"):
+            end = idx + 1
+            while end < len(text):
+                nxt = text[end]
+                if not (nxt.isascii() and (nxt.isalnum() or nxt == "_")):
+                    break
+                end += 1
+            total += max(1, (end - idx + _ASCII_TOKEN_CHUNK - 1) // _ASCII_TOKEN_CHUNK)
+            idx = end
+            continue
+        if _is_cjk_like(ch):
+            end = idx + 1
+            while end < len(text) and _is_cjk_like(text[end]):
+                end += 1
+            total += end - idx
+            idx = end
+            continue
+        total += 1
+        idx += 1
+    return total
+
+
+def _append_content_parts(parts: list[str], content: Any, *, include_non_text_parts: bool) -> None:
+    """Append textual payloads that materially affect prompt size."""
+    if isinstance(content, str):
+        parts.append(content)
+        return
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text", "")
+                if text:
+                    parts.append(text)
+            elif include_non_text_parts:
+                parts.append(json.dumps(part, ensure_ascii=False))
+        return
+    if include_non_text_parts and content is not None:
+        parts.append(json.dumps(content, ensure_ascii=False))
+
+
+def _collect_message_parts(
+    message: dict[str, Any],
+    *,
+    include_non_text_parts: bool,
+) -> list[str]:
+    """Collect message fields that contribute to prompt size."""
+    parts: list[str] = []
+    _append_content_parts(parts, message.get("content"), include_non_text_parts=include_non_text_parts)
+
+    for key in ("name", "tool_call_id"):
+        value = message.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        parts.append(json.dumps(tool_calls, ensure_ascii=False))
+
+    reasoning_content = message.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content:
+        parts.append(reasoning_content)
+
+    return parts
+
+
+def _estimate_parts_native(parts: list[str]) -> int:
+    """Estimate token count from collected text parts using local heuristics."""
+    return sum(_estimate_text_tokens_native(part) for part in parts if part)
+
+
+def _estimate_parts_with_tiktoken(parts: list[str], *, overhead: int) -> int | None:
+    """Optionally refine token estimates when tiktoken is installed."""
+    encoding = _get_tiktoken_encoding()
+    if encoding is None:
+        return None
+    payload = "\n".join(part for part in parts if part)
+    try:
+        return len(encoding.encode(payload)) + overhead
+    except Exception:
+        return None
+
+
+def _estimate_prompt_tokens_local(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> tuple[int, str]:
+    """Estimate prompt tokens using native heuristics with optional refinement."""
+    parts: list[str] = []
+    for message in messages:
+        parts.extend(_collect_message_parts(message, include_non_text_parts=False))
+    if tools:
+        parts.append(json.dumps(tools, ensure_ascii=False))
+
+    overhead = len(messages) * 4
+    native_estimate = _estimate_parts_native(parts) + overhead
+    tiktoken_estimate = _estimate_parts_with_tiktoken(parts, overhead=overhead)
+    if tiktoken_estimate is not None:
+        return max(native_estimate, tiktoken_estimate), "native_estimate+tiktoken"
+    return native_estimate, "native_estimate"
 
 
 def split_message(content: str, max_len: int = 2000) -> list[str]:
@@ -135,83 +282,21 @@ def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> int:
-    """Estimate prompt tokens with tiktoken.
-
-    Counts all fields that providers send to the LLM: content, tool_calls,
-    reasoning_content, tool_call_id, name, plus per-message framing overhead.
-    """
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        parts: list[str] = []
-        for msg in messages:
-            content = msg.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            parts.append(txt)
-
-            tc = msg.get("tool_calls")
-            if tc:
-                parts.append(json.dumps(tc, ensure_ascii=False))
-
-            rc = msg.get("reasoning_content")
-            if isinstance(rc, str) and rc:
-                parts.append(rc)
-
-            for key in ("name", "tool_call_id"):
-                value = msg.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
-
-        if tools:
-            parts.append(json.dumps(tools, ensure_ascii=False))
-
-        per_message_overhead = len(messages) * 4
-        return len(enc.encode("\n".join(parts))) + per_message_overhead
-    except Exception:
-        return 0
+    """Estimate prompt tokens with a built-in heuristic tokenizer."""
+    estimated, _source = _estimate_prompt_tokens_local(messages, tools)
+    return estimated
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
-    content = message.get("content")
-    parts: list[str] = []
-    if isinstance(content, str):
-        parts.append(content)
-    elif isinstance(content, list):
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                text = part.get("text", "")
-                if text:
-                    parts.append(text)
-            else:
-                parts.append(json.dumps(part, ensure_ascii=False))
-    elif content is not None:
-        parts.append(json.dumps(content, ensure_ascii=False))
-
-    for key in ("name", "tool_call_id"):
-        value = message.get(key)
-        if isinstance(value, str) and value:
-            parts.append(value)
-    if message.get("tool_calls"):
-        parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
-
-    rc = message.get("reasoning_content")
-    if isinstance(rc, str) and rc:
-        parts.append(rc)
-
-    payload = "\n".join(parts)
-    if not payload:
+    parts = _collect_message_parts(message, include_non_text_parts=True)
+    if not parts:
         return 4
-    try:
-        enc = tiktoken.get_encoding("cl100k_base")
-        return max(4, len(enc.encode(payload)) + 4)
-    except Exception:
-        return max(4, len(payload) // 4 + 4)
+    native_estimate = max(4, _estimate_parts_native(parts) + 4)
+    tiktoken_estimate = _estimate_parts_with_tiktoken(parts, overhead=4)
+    if tiktoken_estimate is not None:
+        return max(native_estimate, tiktoken_estimate)
+    return native_estimate
 
 
 def estimate_prompt_tokens_chain(
@@ -220,7 +305,7 @@ def estimate_prompt_tokens_chain(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> tuple[int, str]:
-    """Estimate prompt tokens via provider counter first, then tiktoken fallback."""
+    """Estimate prompt tokens via provider counter first, then local fallback."""
     provider_counter = getattr(provider, "estimate_prompt_tokens", None)
     if callable(provider_counter):
         try:
@@ -230,9 +315,9 @@ def estimate_prompt_tokens_chain(
         except Exception:
             pass
 
-    estimated = estimate_prompt_tokens(messages, tools)
+    estimated, source = _estimate_prompt_tokens_local(messages, tools)
     if estimated > 0:
-        return int(estimated), "tiktoken"
+        return int(estimated), source
     return 0, "none"
 
 

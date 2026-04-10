@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from forensic_claw.cli.commands import _make_provider, app
+from forensic_claw.channels.kakaotalk import KakaoTalkConfig
+from forensic_claw.cli.commands import _make_provider, _should_enable_onboard_wizard, app
 from forensic_claw.config.schema import Config
 from forensic_claw.providers.registry import PROVIDERS, find_by_name
 
@@ -27,6 +29,13 @@ def test_default_config_uses_vllm() -> None:
     assert config.get_api_base() == "http://localhost:8000/v1"
 
 
+def test_default_hosts_bind_to_loopback() -> None:
+    config = Config()
+
+    assert config.gateway.host == "127.0.0.1"
+    assert KakaoTalkConfig().host == "127.0.0.1"
+
+
 def test_config_accepts_custom_provider_settings() -> None:
     config = Config.model_validate(
         {
@@ -37,6 +46,17 @@ def test_config_accepts_custom_provider_settings() -> None:
 
     assert config.get_provider_name() == "custom"
     assert config.get_api_base() == "http://127.0.0.1:8080/v1"
+
+
+def test_config_normalizes_human_entered_api_base() -> None:
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"provider": "custom", "model": "llama.cpp/local"}},
+            "providers": {"custom": {"apiBase": "183.96.3.137:0408"}},
+        }
+    )
+
+    assert config.get_api_base() == "http://183.96.3.137:0408/v1"
 
 
 def test_make_provider_passes_extra_headers_to_custom_provider() -> None:
@@ -84,6 +104,23 @@ def test_onboard_fresh_install_mentions_local_providers(tmp_path, monkeypatch):
     assert "Discord, KakaoTalk" in result.stdout
     assert config_file.exists()
     assert (workspace_dir / "AGENTS.md").exists()
+
+
+def test_onboard_wizard_auto_detection_prefers_explicit_flag(monkeypatch) -> None:
+    monkeypatch.setattr("forensic_claw.cli.commands.sys.stdin", SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setattr("forensic_claw.cli.commands.sys.stdout", SimpleNamespace(isatty=lambda: False))
+
+    assert _should_enable_onboard_wizard(True) is True
+    assert _should_enable_onboard_wizard(False) is False
+
+
+def test_onboard_wizard_auto_detection_uses_tty(monkeypatch) -> None:
+    monkeypatch.setattr("forensic_claw.cli.commands.sys.stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr("forensic_claw.cli.commands.sys.stdout", SimpleNamespace(isatty=lambda: True))
+    assert _should_enable_onboard_wizard(None) is True
+
+    monkeypatch.setattr("forensic_claw.cli.commands.sys.stdout", SimpleNamespace(isatty=lambda: False))
+    assert _should_enable_onboard_wizard(None) is False
 
 
 def test_provider_login_is_unavailable() -> None:

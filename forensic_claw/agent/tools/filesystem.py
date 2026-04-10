@@ -1,12 +1,114 @@
 """File system tools: read, write, edit, list."""
 
+import codecs
 import difflib
+import locale
 import mimetypes
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import chardet
+
 from forensic_claw.agent.tools.base import Tool
 from forensic_claw.utils.helpers import build_image_content_blocks, detect_image_mime
+
+
+@dataclass(frozen=True)
+class _DecodedText:
+    """Decoded text payload with the encoding used to produce it."""
+
+    text: str
+    encoding: str
+
+
+_BINARY_PREVIEW_BYTES = 128
+_HEX_PREVIEW_WIDTH = 16
+
+
+def _append_candidate(candidates: list[str], encoding: str | None) -> None:
+    if not encoding:
+        return
+    lowered = encoding.lower()
+    if lowered not in {item.lower() for item in candidates}:
+        candidates.append(encoding)
+
+
+def _looks_like_utf16_bytes(raw: bytes) -> bool:
+    if len(raw) < 8 or b"\x00" not in raw:
+        return False
+
+    even_bytes = raw[0::2]
+    odd_bytes = raw[1::2]
+    even_null_ratio = even_bytes.count(0) / max(len(even_bytes), 1)
+    odd_null_ratio = odd_bytes.count(0) / max(len(odd_bytes), 1)
+    return even_null_ratio >= 0.6 or odd_null_ratio >= 0.6
+
+
+def _encoding_candidates(raw: bytes) -> list[str]:
+    candidates: list[str] = []
+    if raw.startswith(codecs.BOM_UTF8):
+        _append_candidate(candidates, "utf-8-sig")
+    elif raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        _append_candidate(candidates, "utf-16")
+
+    detected = chardet.detect(raw).get("encoding")
+    utf16_hint = detected.lower().startswith("utf-16") if isinstance(detected, str) else False
+
+    _append_candidate(candidates, "utf-8")
+    _append_candidate(candidates, "cp949")
+    _append_candidate(candidates, locale.getpreferredencoding(False))
+    _append_candidate(candidates, detected)
+
+    if _looks_like_utf16_bytes(raw) or utf16_hint:
+        for encoding in ("utf-16-le", "utf-16-be"):
+            _append_candidate(candidates, encoding)
+    return candidates
+
+
+def _looks_like_text(text: str) -> bool:
+    if not text:
+        return True
+    if "\x00" in text:
+        return False
+
+    replacement_chars = text.count("\ufffd")
+    if replacement_chars > max(1, len(text) // 20):
+        return False
+
+    control_chars = sum(
+        1
+        for ch in text
+        if ord(ch) < 32 and ch not in "\n\r\t\f"
+    )
+    return control_chars <= max(2, len(text) // 100)
+
+
+def _decode_text_file(raw: bytes) -> _DecodedText | None:
+    for encoding in _encoding_candidates(raw):
+        try:
+            text = raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+        if _looks_like_text(text):
+            return _DecodedText(text=text, encoding=encoding)
+    return None
+
+
+def _format_binary_preview(path: str, raw: bytes, mime: str | None) -> str:
+    preview = raw[:_BINARY_PREVIEW_BYTES]
+    lines = [
+        f"(Binary file: {path})",
+        f"MIME: {mime or 'unknown'}",
+        f"Size: {len(raw)} bytes",
+    ]
+    if preview:
+        lines.append(f"Hex preview (first {len(preview)} bytes):")
+        for offset in range(0, len(preview), _HEX_PREVIEW_WIDTH):
+            chunk = preview[offset : offset + _HEX_PREVIEW_WIDTH]
+            hex_bytes = " ".join(f"{byte:02x}" for byte in chunk)
+            lines.append(f"{offset:08x}  {hex_bytes}")
+    return "\n".join(lines)
 
 
 def _resolve_path(
@@ -111,10 +213,11 @@ class ReadFileTool(_FsTool):
             if mime and mime.startswith("image/"):
                 return build_image_content_blocks(raw, mime, str(fp), f"(Image file: {path})")
 
-            try:
-                text_content = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                return f"Error: Cannot read binary file {path} (MIME: {mime or 'unknown'}). Only UTF-8 text and images are supported."
+            decoded = _decode_text_file(raw)
+            if decoded is None:
+                return _format_binary_preview(path, raw, mime)
+
+            text_content = decoded.text
 
             all_lines = text_content.splitlines()
             total = len(all_lines)
@@ -271,8 +374,12 @@ class EditFileTool(_FsTool):
                 return f"Error: File not found: {path}"
 
             raw = fp.read_bytes()
+            decoded = _decode_text_file(raw)
+            if decoded is None:
+                return f"Error: Cannot edit binary file: {path}"
+
             uses_crlf = b"\r\n" in raw
-            content = raw.decode("utf-8").replace("\r\n", "\n")
+            content = decoded.text.replace("\r\n", "\n")
             match, count = _find_match(content, old_text.replace("\r\n", "\n"))
 
             if match is None:
@@ -288,7 +395,7 @@ class EditFileTool(_FsTool):
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
-            fp.write_bytes(new_content.encode("utf-8"))
+            fp.write_bytes(new_content.encode(decoded.encoding))
             return f"Successfully edited {fp}"
         except PermissionError as e:
             return f"Error: {e}"

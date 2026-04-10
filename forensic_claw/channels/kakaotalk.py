@@ -25,7 +25,7 @@ class KakaoTalkConfig(Base):
     """KakaoTalk webhook server configuration."""
 
     enabled: bool = False
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 3000
     skill_path: str = "/skill"
     health_path: str = "/health"

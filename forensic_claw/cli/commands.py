@@ -247,15 +247,36 @@ def main(
 # ============================================================================
 
 
+def _stream_is_tty(stream: Any) -> bool:
+    """Return True when a stdio stream looks interactive."""
+    try:
+        return bool(stream.isatty())
+    except Exception:
+        return False
+
+
+def _should_enable_onboard_wizard(wizard: bool | None) -> bool:
+    """Resolve whether onboard should use the interactive wizard."""
+    if wizard is not None:
+        return wizard
+    return _stream_is_tty(sys.stdin) and _stream_is_tty(sys.stdout)
+
+
 @app.command()
 def onboard(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-    wizard: bool = typer.Option(False, "--wizard", help="Use interactive wizard"),
+    wizard: bool | None = typer.Option(
+        None,
+        "--wizard/--no-wizard",
+        help="Use interactive wizard (default: auto in interactive terminals)",
+    ),
 ):
     """Initialize forensic-claw configuration and workspace."""
     from forensic_claw.config.loader import get_config_path, load_config, save_config, set_config_path
     from forensic_claw.config.schema import Config
+
+    wizard_enabled = _should_enable_onboard_wizard(wizard)
 
     if config:
         config_path = Path(config).expanduser().resolve()
@@ -271,7 +292,7 @@ def onboard(
 
     # Create or update config
     if config_path.exists():
-        if wizard:
+        if wizard_enabled:
             config = _apply_workspace_override(load_config(config_path))
         else:
             console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
@@ -288,16 +309,16 @@ def onboard(
     else:
         config = _apply_workspace_override(Config())
         # In wizard mode, don't save yet - the wizard will handle saving if should_save=True
-        if not wizard:
+        if not wizard_enabled:
             save_config(config, config_path)
             console.print(f"[green]✓[/green] Created config at {config_path}")
 
     # Run interactive wizard if enabled
-    if wizard:
+    if wizard_enabled:
         from forensic_claw.cli.onboard import run_onboard
 
         try:
-            result = run_onboard(initial_config=config)
+            result = run_onboard(initial_config=config, guided_initial_setup=True)
             if not result.should_save:
                 console.print("[yellow]Configuration discarded. No changes were saved.[/yellow]")
                 return
@@ -327,7 +348,7 @@ def onboard(
 
     console.print(f"\n{__logo__} forensic-claw is ready!")
     console.print("\nNext steps:")
-    if wizard:
+    if wizard_enabled:
         console.print(f"  1. Chat: [cyan]{agent_cmd}[/cyan]")
         console.print(f"  2. Start gateway: [cyan]{gateway_cmd}[/cyan]")
     else:
@@ -1107,15 +1128,14 @@ def status():
                 continue
             if spec.is_oauth:
                 console.print(f"{spec.label}: [green]✓ (OAuth)[/green]")
-            elif spec.is_local:
-                # Local deployments show api_base instead of api_key
+            else:
                 if p.api_base:
                     console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
+                elif spec.default_api_base and (spec.is_local or spec.is_direct):
+                    console.print(f"{spec.label}: [dim]default {spec.default_api_base}[/dim]")
                 else:
-                    console.print(f"{spec.label}: [dim]not set[/dim]")
-            else:
-                has_key = bool(p.api_key)
-                console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+                    has_key = bool(p.api_key)
+                    console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
 
 
 # ============================================================================

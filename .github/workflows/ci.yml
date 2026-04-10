@@ -5,11 +5,12 @@ on:
   #   branches: [ main, nightly ]
   # pull_request:
   #   branches: [ main, nightly ]
-  workflow_dispatch: # 수동 실행만 가능하도록 변경
+  workflow_dispatch:
 
 
 jobs:
-  test:
+  test-linux:
+    name: Linux py${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,4 +34,31 @@ jobs:
       run: uv sync --all-extras
 
     - name: Run tests
-      run: uv run pytest tests/
+      run: uv run pytest tests -q
+
+  test-windows:
+    name: Windows py${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Install all dependencies
+      run: uv sync --all-extras
+
+    - name: Run tests
+      run: uv run python -m pytest tests -q
+
+    - name: CLI smoke
+      run: uv run forensic-claw --help

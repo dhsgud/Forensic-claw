@@ -2,8 +2,9 @@
 
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -12,6 +13,29 @@ class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+def normalize_openai_api_base(value: str | None) -> str | None:
+    """Normalize an OpenAI-compatible base URL for human-friendly input."""
+    if value is None:
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    candidate = raw if "://" in raw else f"http://{raw}"
+    parsed = urlsplit(candidate)
+
+    # If parsing still fails to produce a host, keep the raw value untouched.
+    if not parsed.netloc:
+        return raw
+
+    path = parsed.path.rstrip("/")
+    if not path:
+        path = "/v1"
+
+    return urlunsplit((parsed.scheme or "http", parsed.netloc, path, "", ""))
 
 
 class ChannelsConfig(Base):
@@ -58,6 +82,11 @@ class ProviderConfig(Base):
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None
 
+    @field_validator("api_base", mode="before")
+    @classmethod
+    def _normalize_api_base(cls, value: str | None) -> str | None:
+        return normalize_openai_api_base(value)
+
 
 class ProvidersConfig(Base):
     """Configuration for local OpenAI-compatible providers."""
@@ -77,7 +106,7 @@ class HeartbeatConfig(Base):
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
 

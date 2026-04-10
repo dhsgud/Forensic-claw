@@ -17,6 +17,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from forensic_claw.cli.models import (
+    fetch_openai_compatible_models,
     format_token_count,
     get_model_context_limit,
     get_model_suggestions,
@@ -520,7 +521,49 @@ def _handle_context_window_field(
         setattr(working_model, field_name, new_value)
 
 
+def _select_provider_name(
+    current_provider: str | None,
+    *,
+    config: Config | None = None,
+    prompt: str = "Select provider:",
+) -> str | None | object:
+    """Select a provider from the registry."""
+    labels: dict[str, str] = {}
+    default_label: str | None = None
+
+    for name, display in _get_provider_names().items():
+        flags: list[str] = []
+        if name == current_provider:
+            flags.append("selected" if config is not None else "current")
+        if config is not None:
+            provider_config = getattr(config.providers, name, None)
+            is_configured = bool(
+                provider_config and (provider_config.api_key or provider_config.api_base)
+            )
+            flags.append("configured" if is_configured else "not configured")
+
+        label = f"{display} [{' / '.join(flags)}]" if flags else display
+        labels[label] = name
+        if name == current_provider:
+            default_label = label
+
+    answer = _select_with_back(prompt, list(labels.keys()), default=default_label)
+    if answer is _BACK_PRESSED or answer is None:
+        return answer
+    return labels[str(answer)]
+
+
+def _handle_provider_field(
+    working_model: BaseModel, field_name: str, _field_display: str, current_value: Any
+) -> None:
+    """Handle provider selection via registry-backed choices."""
+    new_value = _select_provider_name(str(current_value or "").strip() or None)
+    if isinstance(new_value, str) and new_value != current_value:
+        setattr(working_model, field_name, new_value)
+
+
 _FIELD_HANDLERS: dict[str, Any] = {
+    "provider": _handle_provider_field,
     "model": _handle_model_field,
     "context_window_tokens": _handle_context_window_field,
 }
@@ -704,43 +747,65 @@ def _configure_provider(config: Config, provider_name: str) -> None:
         setattr(config.providers, provider_name, updated_provider)
 
 
+def _select_model_for_provider(
+    config: Config,
+    provider_name: str,
+    current_model: str,
+) -> str | None | object:
+    """Select a model, preferring live provider-discovered model IDs."""
+    api_base = getattr(config.providers, provider_name, None)
+    live_models = fetch_openai_compatible_models(
+        api_base.api_base if api_base is not None else None
+    )
+
+    if live_models:
+        choices = list(live_models)
+        if current_model and current_model not in choices:
+            choices.append("[Enter model manually]")
+        answer = _select_with_back(
+            "Select default model:",
+            choices,
+            default=current_model if current_model in choices else choices[0],
+        )
+        if answer in {_BACK_PRESSED, None}:
+            return answer
+        if answer != "[Enter model manually]":
+            return str(answer)
+
+    return _input_model_with_autocomplete("Default Model", current_model, provider_name)
+
+
 def _configure_providers(config: Config) -> None:
     """Configure LLM providers."""
+    try:
+        console.clear()
+        _show_section_header(
+            "LLM Provider",
+            "Select the default provider, then enter provider connection values and the default model",
+        )
+        provider_name = _select_provider_name(
+            config.agents.defaults.provider,
+            config=config,
+            prompt="Select default provider:",
+        )
 
-    def get_provider_choices() -> list[str]:
-        """Build provider choices with config status indicators."""
-        choices = []
-        for name, display in _get_provider_names().items():
-            provider = getattr(config.providers, name, None)
-            if provider and provider.api_key:
-                choices.append(f"{display} *")
-            else:
-                choices.append(display)
-        return choices + ["<- Back"]
+        if provider_name is _BACK_PRESSED or provider_name is None:
+            return
 
-    while True:
-        try:
-            console.clear()
-            _show_section_header("LLM Providers", "Select a provider to configure API key and endpoint")
-            choices = get_provider_choices()
-            answer = _select_with_back("Select provider:", choices)
+        assert isinstance(provider_name, str)
+        config.agents.defaults.provider = provider_name
+        _configure_provider(config, provider_name)
 
-            if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
-                break
-
-            # Type guard: answer is now guaranteed to be a string
-            assert isinstance(answer, str)
-            # Extract provider name from choice (remove " *" suffix if present)
-            provider_name = answer.replace(" *", "")
-            # Find the actual provider key from display names
-            for name, display in _get_provider_names().items():
-                if display == provider_name:
-                    _configure_provider(config, name)
-                    break
-
-        except KeyboardInterrupt:
-            console.print("\n[dim]Returning to main menu...[/dim]")
-            break
+        selected_model = _select_model_for_provider(
+            config,
+            provider_name,
+            config.agents.defaults.model,
+        )
+        if isinstance(selected_model, str) and selected_model:
+            config.agents.defaults.model = selected_model
+            _try_auto_fill_context_window(config.agents.defaults, selected_model)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Returning to main menu...[/dim]")
 
 
 # --- Channel Configuration ---
@@ -778,6 +843,49 @@ def _get_channel_config_class(channel: str) -> type[BaseModel] | None:
     return entry[1] if entry else None
 
 
+def _is_channel_enabled(channel: Any) -> bool:
+    """Return True when a channel config is enabled."""
+    if isinstance(channel, dict):
+        return bool(channel.get("enabled", False))
+    return bool(getattr(channel, "enabled", False))
+
+
+def _ensure_channel_config_dict(config: Config, channel_name: str) -> dict[str, Any]:
+    """Ensure a channel config exists as a mutable dict on the root config."""
+    channel = getattr(config.channels, channel_name, None)
+    if isinstance(channel, dict):
+        channel_dict = dict(channel)
+    elif isinstance(channel, BaseModel):
+        channel_dict = channel.model_dump(by_alias=True, exclude_none=True)
+    else:
+        config_cls = _get_channel_config_class(channel_name)
+        channel_dict = config_cls().model_dump(by_alias=True, exclude_none=True) if config_cls else {}
+    setattr(config.channels, channel_name, channel_dict)
+    return channel_dict
+
+
+def _apply_guided_channel_defaults(channel_name: str, channel_dict: dict[str, Any]) -> dict[str, Any]:
+    """Apply usability-first defaults when a channel is selected during onboarding."""
+    if channel_name == "discord" and not channel_dict.get("allowFrom"):
+        channel_dict["allowFrom"] = ["*"]
+    return channel_dict
+
+
+def _prompt_enabled_channels(config: Config) -> list[str] | None:
+    """Prompt for the set of enabled channels."""
+    q = _get_questionary()
+    choices = []
+    for name, display in _get_channel_names().items():
+        enabled = _is_channel_enabled(getattr(config.channels, name, None))
+        title = f"{display} [enabled]" if enabled else display
+        choices.append(q.Choice(title=title, value=name, checked=enabled))
+    return q.checkbox(
+        "Select channels to enable and configure:",
+        choices=choices,
+        qmark=">",
+    ).ask()
+
+
 def _configure_channel(config: Config, channel_name: str) -> None:
     """Configure a single channel."""
     channel_dict = getattr(config.channels, channel_name, None)
@@ -805,24 +913,28 @@ def _configure_channel(config: Config, channel_name: str) -> None:
 
 def _configure_channels(config: Config) -> None:
     """Configure chat channels."""
-    channel_names = list(_get_channel_names().keys())
-    choices = channel_names + ["<- Back"]
+    try:
+        console.clear()
+        _show_section_header(
+            "Chat Channels",
+            "Select one or more channels to enable. Selected channels will open for value entry.",
+        )
+        selected = _prompt_enabled_channels(config)
+        if selected is None:
+            return
 
-    while True:
-        try:
-            console.clear()
-            _show_section_header("Chat Channels", "Select a channel to configure connection settings")
-            answer = _select_with_back("Select channel:", choices)
+        selected_set = set(selected)
+        for name in _get_channel_names():
+            channel_dict = _ensure_channel_config_dict(config, name)
+            channel_dict["enabled"] = name in selected_set
+            if name in selected_set:
+                channel_dict = _apply_guided_channel_defaults(name, channel_dict)
+            setattr(config.channels, name, channel_dict)
 
-            if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
-                break
-
-            # Type guard: answer is now guaranteed to be a string
-            assert isinstance(answer, str)
-            _configure_channel(config, answer)
-        except KeyboardInterrupt:
-            console.print("\n[dim]Returning to main menu...[/dim]")
-            break
+        for name in selected:
+            _configure_channel(config, name)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Returning to main menu...[/dim]")
 
 
 # --- General Settings ---
@@ -900,7 +1012,11 @@ def _show_summary(config: Config) -> None:
     provider_rows = []
     for name, display in _get_provider_names().items():
         provider = getattr(config.providers, name, None)
-        status = "[green]configured[/green]" if (provider and provider.api_key) else "[dim]not configured[/dim]"
+        status = (
+            "[green]configured[/green]"
+            if (provider and (provider.api_key or provider.api_base))
+            else "[dim]not configured[/dim]"
+        )
         provider_rows.append((display, status))
     _print_summary_panel(provider_rows, "LLM Providers")
 
@@ -961,7 +1077,39 @@ def _prompt_main_menu_exit(has_unsaved_changes: bool) -> str:
     return "resume"
 
 
-def run_onboard(initial_config: Config | None = None) -> OnboardResult:
+def _looks_like_unconfigured_install(config: Config) -> bool:
+    """Return True when config still looks like a fresh install."""
+    defaults = Config()
+    provider_ready = any(
+        bool(getattr(config.providers, name, None) and (
+            getattr(getattr(config.providers, name), "api_key", "")
+            or getattr(getattr(config.providers, name), "api_base", None)
+        ))
+        for name in _get_provider_names()
+    )
+    channel_ready = any(
+        _is_channel_enabled(getattr(config.channels, name, None))
+        for name in _get_channel_names()
+    )
+    return (
+        not provider_ready
+        and not channel_ready
+        and config.agents.defaults.provider == defaults.agents.defaults.provider
+        and config.agents.defaults.model == defaults.agents.defaults.model
+    )
+
+
+def _run_guided_initial_setup(config: Config) -> None:
+    """Run the most common first-run setup steps before showing the menu."""
+    _configure_providers(config)
+    _configure_channels(config)
+
+
+def run_onboard(
+    initial_config: Config | None = None,
+    *,
+    guided_initial_setup: bool = False,
+) -> OnboardResult:
     """Run the interactive onboarding questionnaire.
 
     Args:
@@ -981,6 +1129,9 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
 
     original_config = base_config.model_copy(deep=True)
     config = base_config.model_copy(deep=True)
+
+    if guided_initial_setup:
+        _run_guided_initial_setup(config)
 
     while True:
         console.clear()

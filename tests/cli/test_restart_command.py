@@ -26,7 +26,12 @@ def _make_loop():
     with patch("forensic_claw.agent.loop.ContextBuilder"), \
          patch("forensic_claw.agent.loop.SessionManager"), \
          patch("forensic_claw.agent.loop.SubagentManager"):
-        loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
+        loop = AgentLoop(
+            bus=bus,
+            provider=provider,
+            workspace=workspace,
+            enforce_response_language=False,
+        )
     return loop, bus
 
 

@@ -39,48 +39,134 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 
 - [Native Windows Support Plan](docs/NATIVE_WINDOWS_SUPPORT_PLAN.md)
 - [Local Web UI Forensic Workbench Plan](docs/LOCAL_WEB_UI_FORENSIC_WORKBENCH_PLAN.md)
+- [개발 우선순위 로드맵](docs/DEVELOPMENT_PRIORITY_ROADMAP.md)
 - [Karpathy 스타일 포렌식 위키 스킬](docs/KARPATHY_FORENSIC_WIKI_SKILL.md)
 - [Windows Forensic Automation Plan](docs/WINDOWS_FORENSIC_AUTOMATION_PLAN.md)
 - [Windows Artifact MCP Overview](docs/WINDOWS_ARTIFACT_MCP_OVERVIEW.md)
 - [Windows Artifact Integration Strategy](docs/WINDOWS_ARTIFACT_INTEGRATION_STRATEGY.md)
 
-## 설치
+## Native Windows 설치 및 실행
 
-Python 3.11+ 환경에서 설치합니다.
+아래 절차는 `Windows PowerShell` 기준입니다.
 
-```bash
-pip install -e .
+권장 환경:
+
+- Windows 10/11
+- Git
+- Python `3.11+`
+- 권장 interpreter: `64-bit Python`
+- 추가 확인:
+  - `x64 Windows + x64 Python` 실측 통과
+  - `x64 Windows + x86 Python` 실측 통과
+
+메모:
+
+- 설치 후에는 `forensic-claw ...`와 `python -m forensic_claw ...` 둘 다 사용할 수 있습니다.
+- Windows에서는 PATH 문제를 줄이기 위해 문서에서는 `python -m forensic_claw`를 기본 예시로 사용합니다.
+
+### 1. 저장소 clone
+
+```powershell
+git clone https://github.com/dhsgud/Forensic-claw.git
+cd Forensic-claw
 ```
 
-또는 일반 설치:
+### 2. 가상환경 생성
 
-```bash
-pip install .
+권장: 64-bit Python
+
+```powershell
+py -3.12 -m venv .venv
 ```
 
-## 빠른 시작
+`x64 Windows + x86 Python`으로 확인하고 싶다면:
 
-### 1. 초기 설정 파일 생성
-
-```bash
-forensic-claw onboard
+```powershell
+py -3.12-32 -m venv .venv
 ```
 
-또는 대화형 설정:
+가상환경 활성화:
 
-```bash
-forensic-claw onboard --wizard
+```powershell
+.\.venv\Scripts\Activate.ps1
 ```
 
-### 2. 기본 설정
+PowerShell 실행 정책 때문에 활성화가 막히면 현재 세션에만 한정해서 아래를 먼저 실행합니다.
 
-설정 파일 경로:
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+그 다음 `pip`를 최신으로 올립니다.
+
+```powershell
+python -m pip install --upgrade pip
+```
+
+### 3. 패키지 설치
+
+기본 설치:
+
+```powershell
+python -m pip install -e .
+```
+
+개발/테스트까지 같이 설치:
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+더 정확한 토큰 추정을 위해 `tiktoken`까지 같이 설치:
+
+```powershell
+python -m pip install -e ".[tokens]"
+```
+
+개발/테스트 + optional token extras까지 한 번에 설치:
+
+```powershell
+python -m pip install -e ".[dev,tokens]"
+```
+
+메모:
+
+- PowerShell에서는 extras 문법의 대괄호가 해석될 수 있으므로 `"..."`로 감싸는 편이 안전합니다.
+- `tiktoken`은 이제 선택 설치입니다. 기본 설치만으로도 Native Windows 사용과 테스트가 가능합니다.
+
+### 4. 설치 확인
+
+먼저 CLI가 정상 로드되는지 확인합니다.
+
+```powershell
+python -m forensic_claw --help
+```
+
+### 5. 초기 설정 파일 생성
+
+기본 설정 파일과 workspace를 생성합니다. 실제 터미널에서는 `onboard`를 실행하면
+대화형 설정이 자동으로 열리고, 여기서 기본 model provider와 사용할 channels를
+선택한 뒤 필요한 값을 바로 입력할 수 있습니다.
+
+```powershell
+python -m forensic_claw onboard
+```
+
+비대화형으로 기본 파일만 만들고 싶다면:
+
+```powershell
+python -m forensic_claw onboard --no-wizard
+```
+
+생성 경로:
 
 ```text
-~/.forensic-claw/config.json
+%USERPROFILE%\.forensic-claw\config.json
+%USERPROFILE%\.forensic-claw\workspace\
 ```
 
-기본 설정 예시:
+설정 파일 예시:
 
 ```json
 {
@@ -108,16 +194,90 @@ forensic-claw onboard --wizard
 }
 ```
 
-### 3. CLI에서 바로 실행
+### 6. 현재 상태 확인
 
-```bash
-forensic-claw agent
+설치와 초기 설정이 끝났으면 상태를 확인합니다.
+
+```powershell
+python -m forensic_claw status
 ```
 
-### 4. 채널 게이트웨이 실행
+정상이라면 아래 항목이 보여야 합니다.
 
-```bash
-forensic-claw gateway
+- Config 경로
+- Workspace 경로
+- 현재 모델 이름
+
+### 7. 프로바이더 설정
+
+`agent`를 실제로 사용하려면 최소 하나의 프로바이더를 설정해야 합니다.
+
+가장 흔한 두 가지는 아래입니다.
+
+- `vllm`
+- `custom` (`llama.cpp`, LM Studio, 기타 OpenAI-compatible endpoint)
+
+아래 `프로바이더 설정` 섹션의 예시를 그대로 `config.json`에 반영하면 됩니다.
+
+### 8. CLI에서 바로 사용
+
+프로바이더 설정 후 interactive CLI를 시작합니다.
+
+```powershell
+python -m forensic_claw agent
+```
+
+메시지 한 번만 보내고 끝내고 싶다면:
+
+```powershell
+python -m forensic_claw agent -m "Hello"
+```
+
+### 9. 채널 게이트웨이 실행
+
+Discord 또는 KakaoTalk 채널을 붙일 때는 gateway를 실행합니다.
+
+```powershell
+python -m forensic_claw gateway
+```
+
+### 10. Windows 동작 검증
+
+Native Windows에서 설치가 잘 되었는지 빠르게 확인하려면 아래 정도를 먼저 실행하면 됩니다.
+
+```powershell
+python -m forensic_claw --help
+python -m forensic_claw onboard
+python -m forensic_claw status
+```
+
+개발 환경이라 전체 테스트까지 확인하고 싶다면:
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m pytest tests -q
+```
+
+현재 정리 이후 기준 로컬 결과:
+
+```text
+401 passed
+```
+
+## 빠른 시작 요약
+
+PowerShell에서 최소 명령만 빠르게 따라가려면 아래 순서대로 실행하면 됩니다.
+
+```powershell
+git clone https://github.com/dhsgud/Forensic-claw.git
+cd Forensic-claw
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+python -m forensic_claw onboard
+python -m forensic_claw status
+python -m forensic_claw agent
 ```
 
 ## 프로바이더 설정
@@ -225,7 +385,7 @@ forensic-claw gateway
   "channels": {
     "kakaotalk": {
       "enabled": true,
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "port": 3000,
       "skillPath": "/skill",
       "healthPath": "/health",
@@ -248,6 +408,11 @@ forensic-claw gateway
 - 페어링 정보는 런타임 디렉터리의 `kakaotalk/pairs.json`에 저장
 - 일반 텍스트는 `simpleText` 기준으로 자동 분할
 - JSON 문자열을 `basicCard` 또는 `outputs` 템플릿으로 응답 가능
+
+메모:
+
+- 기본값은 `127.0.0.1`입니다.
+- 외부 reverse proxy 또는 별도 ingress 없이 직접 바인딩해야 할 때만 `0.0.0.0`으로 바꾸는 것을 권장합니다.
 
 ### 헬스체크
 
@@ -310,7 +475,7 @@ GET /health
   "channels": {
     "kakaotalk": {
       "enabled": true,
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "port": 3000,
       "allowFrom": ["*"],
       "pairingCode": "CHANGE_ME"
@@ -336,72 +501,6 @@ forensic-claw channels login kakaotalk
 
 - `provider login`은 현재 로컬 전용 빌드에서는 사용하지 않습니다.
 
-## 테스트
+## 저장소 상태와 범위
 
-전체 테스트 실행:
-
-```bash
-python -m pytest tests -q
-```
-
-현재 정리 작업 이후 기준 결과:
-
-```text
-387 passed
-```
-
-## 프로젝트 구조
-
-```text
-forensic_claw/
-├── agent/
-├── bus/
-├── channels/
-│   ├── base.py
-│   ├── discord.py
-│   ├── kakaotalk.py
-│   ├── manager.py
-│   └── registry.py
-├── cli/
-├── config/
-├── providers/
-│   ├── base.py
-│   ├── openai_compat_provider.py
-│   ├── registry.py
-│   └── __init__.py
-├── session/
-├── memory/
-├── cron/
-└── heartbeat/
-```
-
-## 이번 정리에서 제거된 범위
-
-아래 항목은 이 저장소에서 제거되었습니다.
-
-- Telegram
-- Slack
-- WhatsApp
-- Feishu
-- DingTalk
-- Weixin
-- QQ
-- Email
-- Matrix
-- Mochat
-- WeCom
-- Anthropic provider
-- Azure OpenAI provider
-- OpenAI Codex provider
-- transcription provider
-- WhatsApp bridge
-- case GIF 자산
-- clawhub/weather/tmux/github 스킬
-
-상세 내역은 [CHANGE_REPORT_2026-04-07.md](./CHANGE_REPORT_2026-04-07.md)를 참고하세요.
-
-## 주의사항
-
-1. 예전 문서나 외부 글에 있는 다채널/다프로바이더 설명은 현재 저장소 상태와 다를 수 있습니다.
-2. 이 저장소는 현재 `Discord + KakaoTalk`, `vLLM + Custom` 기준으로 맞춰져 있습니다.
-3. 카카오톡 연동은 webhook/callback 인프라가 있어야 정상 운영 가능합니다.
+테스트 기준, 현재 프로젝트 구조, 이번 정리에서 제거된 범위, 운영 시 주의사항은 [docs/REPOSITORY_STATUS_AND_SCOPE.md](./docs/REPOSITORY_STATUS_AND_SCOPE.md)를 참고하세요.

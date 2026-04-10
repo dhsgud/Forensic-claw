@@ -71,3 +71,35 @@ def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
     assert "Channel: cli" in user_content
     assert "Chat ID: direct" in user_content
     assert "Return exactly: OK" in user_content
+
+
+def test_windows_runtime_descriptor_reports_x64_os_and_process(tmp_path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    monkeypatch.setattr("forensic_claw.agent.context.platform.system", lambda: "Windows")
+    monkeypatch.setattr("forensic_claw.agent.context.platform.machine", lambda: "AMD64")
+    monkeypatch.setattr("forensic_claw.agent.context.platform.python_version", lambda: "3.12.9")
+    monkeypatch.setattr(ContextBuilder, "_python_bitness", staticmethod(lambda: 64))
+    monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "AMD64")
+    monkeypatch.delenv("PROCESSOR_ARCHITEW6432", raising=False)
+
+    prompt = builder.build_system_prompt()
+
+    assert "Windows OS x64, Python 3.12.9 (64-bit process, arch x64)" in prompt
+
+
+def test_windows_runtime_descriptor_reports_x86_process_on_x64_os(tmp_path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    monkeypatch.setattr("forensic_claw.agent.context.platform.system", lambda: "Windows")
+    monkeypatch.setattr("forensic_claw.agent.context.platform.machine", lambda: "x86")
+    monkeypatch.setattr("forensic_claw.agent.context.platform.python_version", lambda: "3.11.8")
+    monkeypatch.setattr(ContextBuilder, "_python_bitness", staticmethod(lambda: 32))
+    monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "x86")
+    monkeypatch.setenv("PROCESSOR_ARCHITEW6432", "AMD64")
+
+    prompt = builder.build_system_prompt()
+
+    assert "Windows OS x64, Python 3.11.8 (32-bit process, arch x86)" in prompt

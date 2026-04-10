@@ -92,6 +92,37 @@ class TestReadFileTool:
         assert len(result) <= ReadFileTool._MAX_CHARS + 500  # small margin for footer
         assert "Use offset=" in result
 
+    @pytest.mark.asyncio
+    async def test_cp949_file_is_decoded(self, tool, tmp_path):
+        f = tmp_path / "korean_cp949.txt"
+        f.write_bytes("안녕하세요\n포렌식".encode("cp949"))
+
+        result = await tool.execute(path=str(f))
+
+        assert "안녕하세요" in result
+        assert "포렌식" in result
+
+    @pytest.mark.asyncio
+    async def test_utf16_file_is_decoded(self, tool, tmp_path):
+        f = tmp_path / "utf16.txt"
+        f.write_bytes("line1\nline2".encode("utf-16"))
+
+        result = await tool.execute(path=str(f))
+
+        assert "1| line1" in result
+        assert "2| line2" in result
+
+    @pytest.mark.asyncio
+    async def test_binary_file_returns_hex_preview(self, tool, tmp_path):
+        f = tmp_path / "artifact.bin"
+        f.write_bytes(b"MZ\x00\x01\x02\x03" + bytes(range(16)))
+
+        result = await tool.execute(path=str(f))
+
+        assert "Binary file" in result
+        assert "Hex preview" in result
+        assert "4d 5a" in result.lower()
+
 
 # ---------------------------------------------------------------------------
 # _find_match  (unit tests for the helper)
@@ -211,6 +242,25 @@ class TestEditFileTool:
         f.write_text("hello", encoding="utf-8")
         result = await tool.execute(path=str(f), old_text="hello")
         assert result == "Error editing file: Unknown new_text"
+
+    @pytest.mark.asyncio
+    async def test_edit_preserves_cp949_encoding(self, tool, tmp_path):
+        f = tmp_path / "cp949.txt"
+        f.write_bytes("원본 텍스트".encode("cp949"))
+
+        result = await tool.execute(path=str(f), old_text="원본", new_text="수정")
+
+        assert "Successfully" in result
+        assert f.read_bytes() == "수정 텍스트".encode("cp949")
+
+    @pytest.mark.asyncio
+    async def test_edit_rejects_binary_files(self, tool, tmp_path):
+        f = tmp_path / "artifact.bin"
+        f.write_bytes(b"\x00\x01\x02\x03")
+
+        result = await tool.execute(path=str(f), old_text="a", new_text="b")
+
+        assert "Cannot edit binary file" in result
 
 
 # ---------------------------------------------------------------------------

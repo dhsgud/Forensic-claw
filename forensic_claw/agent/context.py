@@ -2,7 +2,9 @@
 
 import base64
 import mimetypes
+import os
 import platform
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +85,7 @@ Skills with available="false" need dependencies installed first - you can try in
         """Get the core identity section."""
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
-        runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
+        runtime = self._runtime_descriptor()
 
         platform_policy = ""
         if system == "Windows":
@@ -91,6 +93,7 @@ Skills with available="false" need dependencies installed first - you can try in
 - You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.
 - Prefer Windows-native commands or file tools when they are more reliable.
 - If terminal output is garbled, retry with UTF-8 output enabled.
+- Distinguish OS architecture from the current Python process architecture before assuming `System32`, `SysWOW64`, registry view, or tool paths.
 """
         else:
             platform_policy = """## Platform Policy (POSIX)
@@ -126,6 +129,54 @@ Your workspace is at: {workspace_path}
 
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
 IMPORTANT: To send files (images, documents, audio, video) to the user, you MUST call the 'message' tool with the 'media' parameter. Do NOT use read_file to "send" a file — reading a file only shows its content to you, it does NOT deliver the file to the user. Example: message(content="Here is the file", media=["/path/to/file.png"])"""
+
+    @classmethod
+    def _runtime_descriptor(cls) -> str:
+        """Return a runtime descriptor with architecture details when useful."""
+        system = platform.system()
+        python_version = platform.python_version()
+
+        if system == "Windows":
+            os_arch = cls._windows_architecture()
+            process_arch = cls._normalize_arch(platform.machine())
+            python_bits = cls._python_bitness()
+            return (
+                f"Windows OS {os_arch}, Python {python_version} "
+                f"({python_bits}-bit process, arch {process_arch})"
+            )
+
+        machine = platform.machine()
+        return f"{'macOS' if system == 'Darwin' else system} {machine}, Python {python_version}"
+
+    @staticmethod
+    def _python_bitness() -> int:
+        """Return the current Python process bitness."""
+        return 64 if sys.maxsize > 2**32 else 32
+
+    @classmethod
+    def _windows_architecture(cls) -> str:
+        """Detect the Windows OS architecture independently from Python bitness."""
+        env_arch = os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get("PROCESSOR_ARCHITECTURE")
+        normalized = cls._normalize_arch(env_arch or platform.machine())
+        return normalized or "unknown"
+
+    @staticmethod
+    def _normalize_arch(value: str | None) -> str:
+        """Normalize architecture labels to compact user-facing names."""
+        if not value:
+            return "unknown"
+
+        mapping = {
+            "amd64": "x64",
+            "x86_64": "x64",
+            "x64": "x64",
+            "x86": "x86",
+            "i386": "x86",
+            "i686": "x86",
+            "arm64": "arm64",
+            "aarch64": "arm64",
+        }
+        return mapping.get(value.strip().lower(), value.strip())
 
     @staticmethod
     def _build_runtime_context(

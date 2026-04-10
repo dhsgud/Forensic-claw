@@ -109,7 +109,7 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
             "kakaotalk": SimpleNamespace(
                 default_config=lambda: {
                     "enabled": False,
-                    "host": "0.0.0.0",
+                    "host": "127.0.0.1",
                     "port": 3000,
                     "allowFrom": [],
                     "pairingCode": "CHANGE_ME",
