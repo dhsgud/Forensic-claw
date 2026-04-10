@@ -69,9 +69,27 @@ include = [
     "forensic_claw/skills/**/*.md",
     "forensic_claw/skills/**/*.sh",
 ]
+exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["forensic_claw"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"forensic_claw/templates/AGENTS.md" = "forensic_claw/templates/AGENTS.md"
+"forensic_claw/templates/HEARTBEAT.md" = "forensic_claw/templates/HEARTBEAT.md"
+"forensic_claw/templates/SOUL.md" = "forensic_claw/templates/SOUL.md"
+"forensic_claw/templates/TOOLS.md" = "forensic_claw/templates/TOOLS.md"
+"forensic_claw/templates/USER.md" = "forensic_claw/templates/USER.md"
+"forensic_claw/templates/memory/MEMORY.md" = "forensic_claw/templates/memory/MEMORY.md"
+"forensic_claw/skills/README.md" = "forensic_claw/skills/README.md"
+"forensic_claw/skills/cron/SKILL.md" = "forensic_claw/skills/cron/SKILL.md"
+"forensic_claw/skills/forensic-wiki/SKILL.md" = "forensic_claw/skills/forensic-wiki/SKILL.md"
+"forensic_claw/skills/memory/SKILL.md" = "forensic_claw/skills/memory/SKILL.md"
+"forensic_claw/skills/skill-creator/SKILL.md" = "forensic_claw/skills/skill-creator/SKILL.md"
+"forensic_claw/skills/summarize/SKILL.md" = "forensic_claw/skills/summarize/SKILL.md"
 
 [tool.hatch.build.targets.wheel.sources]
 "forensic_claw" = "forensic_claw"
