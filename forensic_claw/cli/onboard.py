@@ -342,11 +342,19 @@ def _input_bool(display_name: str, current: bool | None) -> bool | None:
     ).ask()
 
 
-def _input_text(display_name: str, current: Any, field_type: str) -> Any:
+def _input_text(
+    display_name: str,
+    current: Any,
+    field_type: str,
+    *,
+    sensitive: bool = False,
+) -> Any:
     """Get text input and parse based on field type."""
     default = _format_value_for_input(current, field_type)
 
-    value = _get_questionary().text(f"{display_name}:", default=default).ask()
+    prompt_factory = _get_questionary().password if sensitive else _get_questionary().text
+    prompt_kwargs = {} if sensitive else {"default": default}
+    value = prompt_factory(f"{display_name}:", **prompt_kwargs).ask()
 
     if value is None or value == "":
         return None
@@ -376,7 +384,11 @@ def _input_text(display_name: str, current: Any, field_type: str) -> Any:
 
 
 def _input_with_existing(
-    display_name: str, current: Any, field_type: str
+    display_name: str,
+    current: Any,
+    field_type: str,
+    *,
+    sensitive: bool = False,
 ) -> Any:
     """Handle input with 'keep existing' option for non-empty values."""
     has_existing = current is not None and current != "" and current != {} and current != []
@@ -390,7 +402,21 @@ def _input_with_existing(
         if choice == "Keep existing value" or choice is None:
             return None
 
-    return _input_text(display_name, current, field_type)
+    return _input_text(display_name, current, field_type, sensitive=sensitive)
+
+
+def _apply_guided_channel_prompts(channel_name: str, model: BaseModel) -> BaseModel:
+    """Prompt for important channel credentials before opening the generic editor."""
+    if channel_name == "discord" and hasattr(model, "token"):
+        token = _input_with_existing(
+            "Discord Bot Token",
+            getattr(model, "token", ""),
+            "str",
+            sensitive=True,
+        )
+        if token is not None:
+            setattr(model, "token", token)
+    return model
 
 
 # --- Pydantic Model Configuration ---
@@ -661,7 +687,12 @@ def _configure_pydantic_model(
         if ftype.type_name == "bool":
             new_value = _input_bool(field_display, current_value)
         else:
-            new_value = _input_with_existing(field_display, current_value, ftype.type_name)
+            new_value = _input_with_existing(
+                field_display,
+                current_value,
+                ftype.type_name,
+                sensitive=_is_sensitive_field(field_name),
+            )
         if new_value is not None:
             setattr(working_model, field_name, new_value)
 
@@ -871,22 +902,42 @@ def _apply_guided_channel_defaults(channel_name: str, channel_dict: dict[str, An
     return channel_dict
 
 
-def _prompt_enabled_channels(config: Config) -> list[str] | None:
-    """Prompt for the set of enabled channels."""
-    q = _get_questionary()
-    choices = []
+def _prompt_channel_target(config: Config) -> str | None | object:
+    """Prompt for a channel to enable, reconfigure, or disable."""
+    labels: dict[str, str] = {}
+    default_label: str | None = None
+
     for name, display in _get_channel_names().items():
         enabled = _is_channel_enabled(getattr(config.channels, name, None))
-        title = f"{display} [enabled]" if enabled else display
-        choices.append(q.Choice(title=title, value=name, checked=enabled))
-    return q.checkbox(
-        "Select channels to enable and configure:",
-        choices=choices,
-        qmark=">",
-    ).ask()
+        label = f"{display} [enabled]" if enabled else display
+        labels[label] = name
+        if default_label is None:
+            default_label = label
+
+    answer = _select_with_back(
+        "Select a channel to enable/configure:",
+        list(labels.keys()) + ["[Done]"],
+        default=default_label,
+    )
+    if answer in {_BACK_PRESSED, None, "[Done]"}:
+        return answer
+    return labels[str(answer)]
 
 
-def _configure_channel(config: Config, channel_name: str) -> None:
+def _prompt_configured_channel_action(channel_name: str) -> str | None | object:
+    """Prompt for what to do with an already-enabled channel."""
+    display_name = _get_channel_names().get(channel_name, channel_name)
+    answer = _select_with_back(
+        f"{display_name} is already enabled. What would you like to do?",
+        ["Reconfigure", "Disable", "Back"],
+        default="Reconfigure",
+    )
+    if answer in {_BACK_PRESSED, None}:
+        return answer
+    return str(answer)
+
+
+def _configure_channel(config: Config, channel_name: str) -> bool:
     """Configure a single channel."""
     channel_dict = getattr(config.channels, channel_name, None)
     if channel_dict is None:
@@ -898,17 +949,21 @@ def _configure_channel(config: Config, channel_name: str) -> None:
 
     if config_cls is None:
         console.print(f"[red]No configuration class found for {display_name}[/red]")
-        return
+        return False
 
     model = config_cls.model_validate(channel_dict) if channel_dict else config_cls()
+    model = _apply_guided_channel_prompts(channel_name, model)
 
     updated_channel = _configure_pydantic_model(
         model,
         display_name,
+        skip_fields={"enabled"},
     )
     if updated_channel is not None:
         new_dict = updated_channel.model_dump(by_alias=True, exclude_none=True)
         setattr(config.channels, channel_name, new_dict)
+        return True
+    return False
 
 
 def _configure_channels(config: Config) -> None:
@@ -917,22 +972,37 @@ def _configure_channels(config: Config) -> None:
         console.clear()
         _show_section_header(
             "Chat Channels",
-            "Select one or more channels to enable. Selected channels will open for value entry.",
+            "Select a channel. Disabled channels are enabled and opened for setup immediately.",
         )
-        selected = _prompt_enabled_channels(config)
-        if selected is None:
-            return
+        while True:
+            selected = _prompt_channel_target(config)
+            if selected is _BACK_PRESSED or selected is None:
+                return
+            if selected == "[Done]":
+                return
 
-        selected_set = set(selected)
-        for name in _get_channel_names():
-            channel_dict = _ensure_channel_config_dict(config, name)
-            channel_dict["enabled"] = name in selected_set
-            if name in selected_set:
-                channel_dict = _apply_guided_channel_defaults(name, channel_dict)
-            setattr(config.channels, name, channel_dict)
+            assert isinstance(selected, str)
+            channel_name = selected
+            channel_dict = _ensure_channel_config_dict(config, channel_name)
+            original_channel_dict = dict(channel_dict)
+            was_enabled = bool(channel_dict.get("enabled", False))
 
-        for name in selected:
-            _configure_channel(config, name)
+            if was_enabled:
+                action = _prompt_configured_channel_action(channel_name)
+                if action in {_BACK_PRESSED, None, "Back"}:
+                    continue
+                if action == "Disable":
+                    channel_dict["enabled"] = False
+                    setattr(config.channels, channel_name, channel_dict)
+                    continue
+            else:
+                channel_dict["enabled"] = True
+                channel_dict = _apply_guided_channel_defaults(channel_name, channel_dict)
+                setattr(config.channels, channel_name, channel_dict)
+
+            configured = _configure_channel(config, channel_name)
+            if not configured and not was_enabled:
+                setattr(config.channels, channel_name, original_channel_dict)
     except KeyboardInterrupt:
         console.print("\n[dim]Returning to main menu...[/dim]")
 

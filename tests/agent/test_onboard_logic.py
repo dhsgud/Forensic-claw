@@ -381,6 +381,10 @@ class _SimpleDraftModel(BaseModel):
     api_key: str = ""
 
 
+class _TokenDraftModel(BaseModel):
+    token: str = ""
+
+
 class _NestedDraftModel(BaseModel):
     api_key: str = ""
 
@@ -451,6 +455,24 @@ class TestConfigurePydanticModelDrafts:
         updated = cast(_OuterDraftModel, result)
         assert updated.nested.api_key == "secret"
         assert model.nested.api_key == ""
+
+    def test_sensitive_fields_use_sensitive_input_flow(self, monkeypatch):
+        model = _TokenDraftModel()
+        seen_sensitive_flags: list[bool] = []
+
+        def fake_input(_display, _current, _field_type, *, sensitive=False):
+            seen_sensitive_flags.append(sensitive)
+            return "discord-secret"
+
+        self._patch_prompt_helpers(monkeypatch, ["first", "done"], text_value="unused")
+        monkeypatch.setattr(onboard_wizard, "_input_with_existing", fake_input)
+
+        result = _configure_pydantic_model(model, "Sensitive")
+
+        assert result is not None
+        updated = cast(_TokenDraftModel, result)
+        assert updated.token == "discord-secret"
+        assert seen_sensitive_flags == [True]
 
 
 class TestRunOnboardExitBehavior:
@@ -533,6 +555,7 @@ class TestWizardSelections:
     def test_configure_channels_enables_selected_channels(self, monkeypatch):
         config = Config()
         configured: list[str] = []
+        selections = iter(["discord", "[Done]"])
 
         monkeypatch.setattr(
             onboard_wizard,
@@ -546,13 +569,13 @@ class TestWizardSelections:
         )
         monkeypatch.setattr(
             onboard_wizard,
-            "_prompt_enabled_channels",
-            lambda _config: ["discord"],
+            "_prompt_channel_target",
+            lambda _config: next(selections),
         )
         monkeypatch.setattr(
             onboard_wizard,
             "_configure_channel",
-            lambda _config, channel_name: configured.append(channel_name),
+            lambda _config, channel_name: configured.append(channel_name) or True,
         )
         monkeypatch.setattr(onboard_wizard.console, "clear", lambda: None)
         monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *_args, **_kwargs: None)
@@ -560,11 +583,12 @@ class TestWizardSelections:
         onboard_wizard._configure_channels(config)
 
         assert config.channels.discord["enabled"] is True
-        assert config.channels.kakaotalk["enabled"] is False
+        assert getattr(config.channels, "kakaotalk", None) is None
         assert configured == ["discord"]
 
     def test_configure_channels_applies_discord_allow_all_default(self, monkeypatch):
         config = Config()
+        selections = iter(["discord", "[Done]"])
 
         monkeypatch.setattr(
             onboard_wizard,
@@ -578,13 +602,13 @@ class TestWizardSelections:
         )
         monkeypatch.setattr(
             onboard_wizard,
-            "_prompt_enabled_channels",
-            lambda _config: ["discord"],
+            "_prompt_channel_target",
+            lambda _config: next(selections),
         )
         monkeypatch.setattr(
             onboard_wizard,
             "_configure_channel",
-            lambda *_args, **_kwargs: None,
+            lambda *_args, **_kwargs: True,
         )
         monkeypatch.setattr(onboard_wizard.console, "clear", lambda: None)
         monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *_args, **_kwargs: None)
@@ -592,3 +616,71 @@ class TestWizardSelections:
         onboard_wizard._configure_channels(config)
 
         assert config.channels.discord["allowFrom"] == ["*"]
+
+    def test_configure_channels_reverts_new_enable_when_channel_setup_is_cancelled(self, monkeypatch):
+        config = Config()
+        selections = iter(["discord", "[Done]"])
+
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_names",
+            lambda: {"discord": "Discord"},
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_config_class",
+            lambda _name: _TestChannelConfig,
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_prompt_channel_target",
+            lambda _config: next(selections),
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_configure_channel",
+            lambda *_args, **_kwargs: False,
+        )
+        monkeypatch.setattr(onboard_wizard.console, "clear", lambda: None)
+        monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *_args, **_kwargs: None)
+
+        onboard_wizard._configure_channels(config)
+
+        assert config.channels.discord["enabled"] is False
+
+    def test_configure_channel_prompts_for_discord_bot_token(self, monkeypatch):
+        config = Config()
+        config.channels.discord = {"enabled": True}
+        prompted: list[tuple[str, bool]] = []
+
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_names",
+            lambda: {"discord": "Discord"},
+        )
+        monkeypatch.setattr(
+            onboard_wizard,
+            "_get_channel_config_class",
+            lambda _name: _TestChannelConfig,
+        )
+
+        def fake_input(display_name, current, field_type, *, sensitive=False):
+            prompted.append((display_name, sensitive))
+            assert current == ""
+            assert field_type == "str"
+            return "bot-token-123"
+
+        def fake_configure_model(model, display_name, *, skip_fields=None):
+            assert display_name == "Discord"
+            assert skip_fields == {"enabled"}
+            assert model.token == "bot-token-123"
+            return model
+
+        monkeypatch.setattr(onboard_wizard, "_input_with_existing", fake_input)
+        monkeypatch.setattr(onboard_wizard, "_configure_pydantic_model", fake_configure_model)
+
+        result = onboard_wizard._configure_channel(config, "discord")
+
+        assert result is True
+        assert prompted == [("Discord Bot Token", True)]
+        assert config.channels.discord["token"] == "bot-token-123"
