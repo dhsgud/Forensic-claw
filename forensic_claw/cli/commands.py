@@ -36,6 +36,7 @@ from forensic_claw import __logo__, __version__
 from forensic_claw.cli.stream import StreamRenderer, ThinkingSpinner
 from forensic_claw.config.paths import get_workspace_path, is_default_workspace
 from forensic_claw.config.schema import Config
+from forensic_claw.session.scopes import build_scoped_session_key
 from forensic_claw.utils.helpers import sync_workspace_templates
 
 app = typer.Typer(
@@ -262,6 +263,36 @@ def _should_enable_onboard_wizard(wizard: bool | None) -> bool:
     return _stream_is_tty(sys.stdin) and _stream_is_tty(sys.stdout)
 
 
+def _resolve_session_scope(
+    session_id: str,
+    *,
+    case_id: str | None = None,
+    artifact_id: str | None = None,
+) -> tuple[str, str, str]:
+    """Return (channel, chat_id, session_key) for optional case/artifact scoping."""
+    if ":" in session_id:
+        channel, chat_id = session_id.split(":", 1)
+    else:
+        channel, chat_id = "cli", session_id
+
+    session_key = build_scoped_session_key(
+        channel,
+        chat_id,
+        case_id=case_id,
+        artifact_id=artifact_id,
+    )
+    return channel, chat_id, session_key
+
+
+def _channel_effective_enabled(channel_name: str, section: Any) -> bool:
+    """Return whether a channel is effectively enabled, including built-in local defaults."""
+    if section is None:
+        return channel_name == "webui"
+    if isinstance(section, dict):
+        return bool(section.get("enabled", False))
+    return bool(getattr(section, "enabled", False))
+
+
 @app.command()
 def onboard(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
@@ -354,7 +385,7 @@ def onboard(
     else:
         console.print(f"  1. Configure [cyan]providers.vllm[/cyan] or [cyan]providers.custom[/cyan] in {config_path}")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
-    console.print("\n[dim]Supported chat channels in this build: Discord, KakaoTalk[/dim]")
+    console.print("\n[dim]Supported chat channels in this build: Discord, KakaoTalk, WebUI[/dim]")
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -549,6 +580,8 @@ def gateway(
         thinking_language=config.agents.defaults.thinking_language,
         response_language=config.agents.defaults.response_language,
         enforce_response_language=config.agents.defaults.enforce_response_language,
+        archive_final_answer_as_wiki=config.agents.defaults.archive_final_answer_as_wiki,
+        reset_session_after_answer=config.agents.defaults.reset_session_after_answer,
     )
 
     # Set cron callback (needs agent)
@@ -600,7 +633,7 @@ def gateway(
     cron.on_job = on_cron_job
 
     # Create channel manager
-    channels = ChannelManager(config, bus)
+    channels = ChannelManager(config, bus, session_manager=session_manager)
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -708,6 +741,8 @@ def gateway(
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
     session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    case_id: str | None = typer.Option(None, "--case-id", help="Route the conversation to a case-scoped session"),
+    artifact_id: str | None = typer.Option(None, "--artifact-id", help="Route the conversation to an artifact-scoped session"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
@@ -757,6 +792,8 @@ def agent(
         thinking_language=config.agents.defaults.thinking_language,
         response_language=config.agents.defaults.response_language,
         enforce_response_language=config.agents.defaults.enforce_response_language,
+        archive_final_answer_as_wiki=config.agents.defaults.archive_final_answer_as_wiki,
+        reset_session_after_answer=config.agents.defaults.reset_session_after_answer,
     )
 
     # Shared reference for progress callbacks
@@ -770,12 +807,23 @@ def agent(
             return
         _print_cli_progress_line(content, _thinking)
 
+    cli_channel, cli_chat_id, resolved_session_key = _resolve_session_scope(
+        session_id,
+        case_id=case_id,
+        artifact_id=artifact_id,
+    )
+
     if message:
         # Single message mode — direct call, no bus needed
         async def run_once():
             renderer = StreamRenderer(render_markdown=markdown)
             response = await agent_loop.process_direct(
-                message, session_id,
+                message,
+                session_key=resolved_session_key,
+                channel=cli_channel,
+                chat_id=cli_chat_id,
+                case_id=case_id,
+                artifact_id=artifact_id,
                 on_progress=_cli_progress,
                 on_stream=renderer.on_delta,
                 on_stream_end=renderer.on_end,
@@ -795,11 +843,6 @@ def agent(
         from forensic_claw.bus.events import InboundMessage
         _init_prompt_session()
         console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
-
-        if ":" in session_id:
-            cli_channel, cli_chat_id = session_id.split(":", 1)
-        else:
-            cli_channel, cli_chat_id = "cli", session_id
 
         def _handle_signal(signum, frame):
             sig_name = signal.Signals(signum).name
@@ -895,7 +938,12 @@ def agent(
                             sender_id="user",
                             chat_id=cli_chat_id,
                             content=user_input,
-                            metadata={"_wants_stream": True},
+                            metadata={
+                                "_wants_stream": True,
+                                **({"case_id": case_id} if case_id else {}),
+                                **({"artifact_id": artifact_id} if artifact_id else {}),
+                            },
+                            session_key_override=resolved_session_key,
                         ))
 
                         await turn_done.wait()
@@ -950,12 +998,7 @@ def channels_status():
 
     for name, cls in sorted(discover_all().items()):
         section = getattr(config.channels, name, None)
-        if section is None:
-            enabled = False
-        elif isinstance(section, dict):
-            enabled = section.get("enabled", False)
-        else:
-            enabled = getattr(section, "enabled", False)
+        enabled = _channel_effective_enabled(name, section)
         table.add_row(
             cls.display_name,
             "[green]\u2713[/green]" if enabled else "[dim]\u2717[/dim]",
@@ -1082,12 +1125,7 @@ def plugins_list():
         cls = all_channels[name]
         source = "builtin" if name in builtin_names else "plugin"
         section = getattr(config.channels, name, None)
-        if section is None:
-            enabled = False
-        elif isinstance(section, dict):
-            enabled = section.get("enabled", False)
-        else:
-            enabled = getattr(section, "enabled", False)
+        enabled = _channel_effective_enabled(name, section)
         table.add_row(
             cls.display_name,
             source,

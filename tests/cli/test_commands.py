@@ -6,7 +6,13 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from forensic_claw.channels.kakaotalk import KakaoTalkConfig
-from forensic_claw.cli.commands import _make_provider, _should_enable_onboard_wizard, app
+from forensic_claw.cli.commands import (
+    _channel_effective_enabled,
+    _make_provider,
+    _resolve_session_scope,
+    _should_enable_onboard_wizard,
+    app,
+)
 from forensic_claw.config.schema import Config
 from forensic_claw.providers.registry import PROVIDERS, find_by_name
 
@@ -27,6 +33,8 @@ def test_default_config_uses_vllm() -> None:
     assert config.agents.defaults.provider == "vllm"
     assert config.get_provider_name() == "vllm"
     assert config.get_api_base() == "http://localhost:8000/v1"
+    assert config.agents.defaults.archive_final_answer_as_wiki is False
+    assert config.agents.defaults.reset_session_after_answer is False
 
 
 def test_default_hosts_bind_to_loopback() -> None:
@@ -101,7 +109,7 @@ def test_onboard_fresh_install_mentions_local_providers(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "providers.vllm" in result.stdout
-    assert "Discord, KakaoTalk" in result.stdout
+    assert "Discord, KakaoTalk, WebUI" in result.stdout
     assert config_file.exists()
     assert (workspace_dir / "AGENTS.md").exists()
 
@@ -121,6 +129,23 @@ def test_onboard_wizard_auto_detection_uses_tty(monkeypatch) -> None:
 
     monkeypatch.setattr("forensic_claw.cli.commands.sys.stdout", SimpleNamespace(isatty=lambda: False))
     assert _should_enable_onboard_wizard(None) is False
+
+
+def test_resolve_session_scope_adds_case_and_artifact_markers() -> None:
+    channel, chat_id, session_key = _resolve_session_scope(
+        "webui:browser-1",
+        case_id="Case Alpha",
+        artifact_id="Prefetch #1",
+    )
+
+    assert channel == "webui"
+    assert chat_id == "browser-1"
+    assert session_key == "webui:browser-1:case:Case-Alpha:artifact:Prefetch-1"
+
+
+def test_channel_effective_enabled_defaults_webui_to_enabled() -> None:
+    assert _channel_effective_enabled("webui", None) is True
+    assert _channel_effective_enabled("discord", None) is False
 
 
 def test_provider_login_is_unavailable() -> None:

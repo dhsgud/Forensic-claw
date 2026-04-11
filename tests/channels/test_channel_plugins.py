@@ -12,6 +12,7 @@ from forensic_claw.bus.events import OutboundMessage
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.channels.base import BaseChannel
 from forensic_claw.channels.manager import ChannelManager
+from forensic_claw.channels.webui import WebUIChannel
 from forensic_claw.config.schema import ChannelsConfig
 
 
@@ -41,6 +42,7 @@ def test_discover_all_includes_supported_builtins():
 
     assert "discord" in result
     assert "kakaotalk" in result
+    assert "webui" in result
 
 
 @pytest.mark.asyncio
@@ -63,6 +65,23 @@ async def test_manager_loads_plugin_from_dict_config():
 
     assert "fakeplugin" in mgr.channels
     assert isinstance(mgr.channels["fakeplugin"], _FakePlugin)
+
+
+@pytest.mark.asyncio
+async def test_manager_auto_enables_webui_without_config_section():
+    fake_config = SimpleNamespace(channels=ChannelsConfig())
+
+    with patch("forensic_claw.channels.registry.discover_all", return_value={"webui": WebUIChannel}):
+        mgr = ChannelManager.__new__(ChannelManager)
+        mgr.config = fake_config
+        mgr.bus = MessageBus()
+        mgr.session_manager = None
+        mgr.channels = {}
+        mgr._dispatch_task = None
+        mgr._init_channels()
+
+    assert "webui" in mgr.channels
+    assert isinstance(mgr.channels["webui"], WebUIChannel)
 
 
 @pytest.mark.asyncio

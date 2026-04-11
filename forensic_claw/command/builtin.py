@@ -5,11 +5,36 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from dataclasses import dataclass
 
 from forensic_claw import __version__
 from forensic_claw.bus.events import OutboundMessage
 from forensic_claw.command.router import CommandContext, CommandRouter
 from forensic_claw.utils.helpers import build_status_content
+
+
+@dataclass(frozen=True)
+class BuiltinCommandSpec:
+    """Structured metadata for one built-in slash command."""
+
+    command: str
+    description: str
+    kind: str = "exact"
+
+
+_BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
+    BuiltinCommandSpec("/new", "Start a new conversation"),
+    BuiltinCommandSpec("/reset", "Alias for /new"),
+    BuiltinCommandSpec("/stop", "Stop the current task", kind="priority"),
+    BuiltinCommandSpec("/restart", "Restart the bot", kind="priority"),
+    BuiltinCommandSpec("/status", "Show bot status", kind="priority"),
+    BuiltinCommandSpec("/help", "Show available commands"),
+)
+
+
+def get_builtin_command_specs() -> list[BuiltinCommandSpec]:
+    """Return structured metadata for default slash commands."""
+    return list(_BUILTIN_COMMAND_SPECS)
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
@@ -84,15 +109,8 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
 
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
-    lines = [
-        "🐈 forensic-claw commands:",
-        "/new — Start a new conversation",
-        "/reset — Alias for /new",
-        "/stop — Stop the current task",
-        "/restart — Restart the bot",
-        "/status — Show bot status",
-        "/help — Show available commands",
-    ]
+    lines = ["🐈 forensic-claw commands:"]
+    lines.extend(f"{item.command} — {item.description}" for item in get_builtin_command_specs())
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,

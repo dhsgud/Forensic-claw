@@ -290,6 +290,64 @@ class OpenAICompatProvider(LLMProvider):
         return str(value)
 
     @classmethod
+    def _extract_reasoning_content(cls, value: Any) -> str | None:
+        """Best-effort extraction for providers that stream reasoning separately."""
+        if value is None:
+            return None
+
+        value_map = cls._maybe_mapping(value)
+        if value_map is not None:
+            for key in ("reasoning_content", "reasoning", "reasoning_text"):
+                text = cls._extract_text_content(value_map.get(key))
+                if text:
+                    return text
+
+            content = value_map.get("content")
+            if isinstance(content, list):
+                parts: list[str] = []
+                for item in content:
+                    item_map = cls._maybe_mapping(item) or {}
+                    item_type = str(item_map.get("type") or "").lower()
+                    if item_type not in {"reasoning", "thinking", "reasoning_content"}:
+                        continue
+                    text = cls._extract_text_content(
+                        item_map.get("text")
+                        or item_map.get("content")
+                        or item_map.get("thinking")
+                        or item_map.get("reasoning")
+                    )
+                    if text:
+                        parts.append(text)
+                if parts:
+                    return "".join(parts)
+            return None
+
+        for key in ("reasoning_content", "reasoning", "reasoning_text"):
+            text = cls._extract_text_content(getattr(value, key, None))
+            if text:
+                return text
+
+        content = getattr(value, "content", None)
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                item_type = str(getattr(item, "type", "") or "").lower()
+                if item_type not in {"reasoning", "thinking", "reasoning_content"}:
+                    continue
+                text = cls._extract_text_content(
+                    getattr(item, "text", None)
+                    or getattr(item, "content", None)
+                    or getattr(item, "thinking", None)
+                    or getattr(item, "reasoning", None)
+                )
+                if text:
+                    parts.append(text)
+            if parts:
+                return "".join(parts)
+
+        return None
+
+    @classmethod
     def _extract_usage(cls, response: Any) -> dict[str, int]:
         usage_obj = None
         response_map = cls._maybe_mapping(response)
@@ -339,7 +397,7 @@ class OpenAICompatProvider(LLMProvider):
             finish_reason = str(choice0.get("finish_reason") or "stop")
 
             raw_tool_calls: list[Any] = []
-            reasoning_content = msg0.get("reasoning_content")
+            reasoning_content = self._extract_reasoning_content(msg0)
             for ch in choices:
                 ch_map = self._maybe_mapping(ch) or {}
                 m = self._maybe_mapping(ch_map.get("message")) or {}
@@ -351,7 +409,7 @@ class OpenAICompatProvider(LLMProvider):
                 if not content:
                     content = self._extract_text_content(m.get("content"))
                 if not reasoning_content:
-                    reasoning_content = m.get("reasoning_content")
+                    reasoning_content = self._extract_reasoning_content(m)
 
             parsed_tool_calls = []
             for tc in raw_tool_calls:
@@ -416,12 +474,13 @@ class OpenAICompatProvider(LLMProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason or "stop",
             usage=self._extract_usage(response),
-            reasoning_content=getattr(msg, "reasoning_content", None) or None,
+            reasoning_content=self._extract_reasoning_content(msg),
         )
 
     @classmethod
     def _parse_chunks(cls, chunks: list[Any]) -> LLMResponse:
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tc_bufs: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
         usage: dict[str, int] = {}
@@ -475,6 +534,9 @@ class OpenAICompatProvider(LLMProvider):
                 text = cls._extract_text_content(delta.get("content"))
                 if text:
                     content_parts.append(text)
+                reasoning = cls._extract_reasoning_content(delta)
+                if reasoning:
+                    reasoning_parts.append(reasoning)
                 for idx, tc in enumerate(delta.get("tool_calls") or []):
                     _accum_tc(tc, idx)
                 usage = cls._extract_usage(chunk_map) or usage
@@ -489,6 +551,9 @@ class OpenAICompatProvider(LLMProvider):
             delta = choice.delta
             if delta and delta.content:
                 content_parts.append(delta.content)
+            reasoning = cls._extract_reasoning_content(delta)
+            if reasoning:
+                reasoning_parts.append(reasoning)
             for tc in (delta.tool_calls or []) if delta else []:
                 _accum_tc(tc, getattr(tc, "index", 0))
 
@@ -507,6 +572,7 @@ class OpenAICompatProvider(LLMProvider):
             ],
             finish_reason=finish_reason,
             usage=usage,
+            reasoning_content="".join(reasoning_parts) or None,
         )
 
     @staticmethod
@@ -548,6 +614,7 @@ class OpenAICompatProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         kwargs = self._build_kwargs(
             messages, tools, model, max_tokens, temperature,
@@ -560,10 +627,14 @@ class OpenAICompatProvider(LLMProvider):
             chunks: list[Any] = []
             async for chunk in stream:
                 chunks.append(chunk)
-                if on_content_delta and chunk.choices:
+                if chunk.choices:
                     text = getattr(chunk.choices[0].delta, "content", None)
                     if text:
-                        await on_content_delta(text)
+                        if on_content_delta:
+                            await on_content_delta(text)
+                    reasoning = self._extract_reasoning_content(chunk.choices[0].delta)
+                    if reasoning and on_reasoning_delta:
+                        await on_reasoning_delta(reasoning)
             return self._parse_chunks(chunks)
         except Exception as e:
             return self._handle_error(e)

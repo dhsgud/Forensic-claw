@@ -94,3 +94,9 @@ def test_estimate_prompt_tokens_chain_reports_optional_tiktoken_source(monkeypat
 
     assert tokens > 0
     assert source == "native_estimate+tiktoken"
+
+
+def test_extract_think_collects_closed_and_open_blocks() -> None:
+    text = "<think>첫 번째</think>답변<think>두 번째"
+
+    assert helpers.extract_think(text) == "첫 번째\n\n두 번째"

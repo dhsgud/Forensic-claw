@@ -29,6 +29,8 @@ from forensic_claw.command import CommandContext, CommandRouter, register_builti
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.providers.base import LLMProvider
 from forensic_claw.session.manager import Session, SessionManager
+from forensic_claw.utils.helpers import extract_message_thinking_text, extract_think
+from forensic_claw.wiki import WikiArchive
 
 if TYPE_CHECKING:
     from forensic_claw.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
@@ -48,6 +50,40 @@ class AgentLoop:
     """
 
     _TOOL_RESULT_MAX_CHARS = 16_000
+    _AUTO_BACKGROUND_LOG_PATTERNS = (
+        "시스템 로그",
+        "이벤트 로그",
+        "system log",
+        "system logs",
+        "event log",
+        "event logs",
+        "windows log",
+        "windows logs",
+        "evtx",
+    )
+    _AUTO_BACKGROUND_ANALYSIS_PATTERNS = (
+        "분석",
+        "조사",
+        "검토",
+        "살펴",
+        "점검",
+        "analyze",
+        "analyse",
+        "inspect",
+        "review",
+    )
+    _AUTO_BACKGROUND_NARROW_PATTERNS = (
+        "event id",
+        "eventid",
+        "source",
+        "provider",
+        "최근 ",
+        "last ",
+        "first ",
+        "top ",
+        "maxevents",
+        "특정",
+    )
 
     def __init__(
         self,
@@ -69,6 +105,8 @@ class AgentLoop:
         thinking_language: str = "en",
         response_language: str = "ko",
         enforce_response_language: bool = True,
+        archive_final_answer_as_wiki: bool = False,
+        reset_session_after_answer: bool = False,
     ):
         from forensic_claw.config.schema import ExecToolConfig, WebSearchConfig
 
@@ -89,6 +127,9 @@ class AgentLoop:
         self.thinking_language = thinking_language
         self.response_language = response_language
         self.enforce_response_language = enforce_response_language
+        self.archive_final_answer_as_wiki = archive_final_answer_as_wiki
+        self.reset_session_after_answer = reset_session_after_answer
+        self.wiki_archive = WikiArchive(workspace) if archive_final_answer_as_wiki else None
 
         self.context = ContextBuilder(
             workspace,
@@ -187,12 +228,29 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def _set_tool_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron"):
-            if tool := self.tools.get(name):
-                if hasattr(tool, "set_context"):
-                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+        if tool := self.tools.get("message"):
+            if hasattr(tool, "set_context"):
+                tool.set_context(channel, chat_id, message_id)
+        if tool := self.tools.get("spawn"):
+            if hasattr(tool, "set_context"):
+                tool.set_context(
+                    channel,
+                    chat_id,
+                    session_key=session_key,
+                    metadata=metadata,
+                )
+        if tool := self.tools.get("cron"):
+            if hasattr(tool, "set_context"):
+                tool.set_context(channel, chat_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -276,6 +334,8 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         message_id: str | None = None,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop.
 
@@ -293,23 +353,50 @@ class AgentLoop:
         # consumers (CLI, channels) never see <think> blocks.
         _raw_stream = on_stream
         _stream_buf = ""
+        _reasoning_buf = ""
 
         async def _filtered_stream(delta: str) -> None:
             nonlocal _stream_buf
             from forensic_claw.utils.helpers import strip_think
             prev_clean = strip_think(_stream_buf)
+            prev_think = extract_think(_stream_buf) or ""
             _stream_buf += delta
             new_clean = strip_think(_stream_buf)
+            new_think = extract_think(_stream_buf) or ""
             incremental = new_clean[len(prev_clean):]
+            thinking_delta = new_think[len(prev_think):]
+            if thinking_delta and channel == "webui" and on_progress:
+                await on_progress(thinking_delta)
             if incremental and _raw_stream:
                 await _raw_stream(incremental)
+
+        async def _filtered_reasoning(delta: str) -> None:
+            nonlocal _reasoning_buf
+            if not delta or channel != "webui" or not on_progress:
+                return
+
+            normalized = extract_think(delta) or delta
+            if not normalized:
+                return
+
+            if normalized.startswith(_reasoning_buf):
+                incremental = normalized[len(_reasoning_buf):]
+                _reasoning_buf = normalized
+            else:
+                incremental = normalized
+                _reasoning_buf += normalized
+
+            if incremental:
+                await on_progress(incremental)
 
         while iteration < self.max_iterations:
             iteration += 1
 
             tool_defs = self.tools.get_definitions()
 
-            use_stream = on_stream is not None and not self.enforce_response_language
+            use_stream = on_stream is not None and (
+                not self.enforce_response_language or channel == "webui"
+            )
 
             if use_stream:
                 response = await self.provider.chat_stream_with_retry(
@@ -317,6 +404,7 @@ class AgentLoop:
                     tools=tool_defs,
                     model=self.model,
                     on_content_delta=_filtered_stream,
+                    on_reasoning_delta=_filtered_reasoning,
                 )
             else:
                 response = await self.provider.chat_with_retry(
@@ -349,9 +437,10 @@ class AgentLoop:
                     tc.to_openai_tool_call()
                     for tc in response.tool_calls
                 ]
+                reasoning_text = response.reasoning_content or extract_think(response.content)
                 messages = self.context.add_assistant_message(
                     messages, response.content, tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
+                    reasoning_content=reasoning_text,
                     thinking_blocks=response.thinking_blocks,
                 )
 
@@ -362,7 +451,13 @@ class AgentLoop:
 
                 # Re-bind tool context right before execution so that
                 # concurrent sessions don't clobber each other's routing.
-                self._set_tool_context(channel, chat_id, message_id)
+                self._set_tool_context(
+                    channel,
+                    chat_id,
+                    message_id,
+                    session_key=session_key,
+                    metadata=metadata,
+                )
 
                 # Execute all tool calls concurrently — the LLM batches
                 # independent calls in a single response on purpose.
@@ -390,8 +485,9 @@ class AgentLoop:
                     logger.error("LLM returned error: {}", (clean or "")[:200])
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
                     break
+                reasoning_text = response.reasoning_content or extract_think(response.content)
                 messages = self.context.add_assistant_message(
-                    messages, clean, reasoning_content=response.reasoning_content,
+                    messages, clean, reasoning_content=reasoning_text,
                     thinking_blocks=response.thinking_blocks,
                 )
                 final_content = clean
@@ -445,6 +541,8 @@ class AgentLoop:
         async with lock, gate:
             try:
                 on_stream = on_stream_end = None
+                did_stream_output = False
+                last_stream_id: str | None = None
                 if msg.metadata.get("_wants_stream"):
                     # Split one answer into distinct stream segments.
                     stream_base_id = f"{msg.session_key}:{time.time_ns()}"
@@ -454,6 +552,9 @@ class AgentLoop:
                         return f"{stream_base_id}:{stream_segment}"
 
                     async def on_stream(delta: str) -> None:
+                        nonlocal did_stream_output, last_stream_id
+                        did_stream_output = True
+                        last_stream_id = _current_stream_id()
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
                             content=delta,
@@ -464,7 +565,8 @@ class AgentLoop:
                         ))
 
                     async def on_stream_end(*, resuming: bool = False) -> None:
-                        nonlocal stream_segment
+                        nonlocal stream_segment, last_stream_id
+                        last_stream_id = _current_stream_id()
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="",
@@ -480,6 +582,11 @@ class AgentLoop:
                     msg, on_stream=on_stream, on_stream_end=on_stream_end,
                 )
                 if response is not None:
+                    if did_stream_output:
+                        if msg.channel == "webui" and last_stream_id:
+                            response.metadata["_replace_stream_id"] = last_stream_id
+                        else:
+                            response.metadata["_streamed"] = True
                     await self.bus.publish_outbound(response)
                 elif msg.channel == "cli":
                     await self.bus.publish_outbound(OutboundMessage(
@@ -519,6 +626,48 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    @classmethod
+    def _should_auto_background_large_log_task(cls, msg: InboundMessage) -> bool:
+        """Detect broad local log-analysis requests that should move to the background."""
+        if msg.channel == "system":
+            return False
+        if (msg.metadata or {}).get("_background_task"):
+            return False
+
+        raw = msg.content.strip()
+        if not raw or raw.startswith("/"):
+            return False
+
+        lowered = raw.lower()
+        has_log_target = any(token in lowered for token in cls._AUTO_BACKGROUND_LOG_PATTERNS)
+        has_analysis_intent = any(token in lowered for token in cls._AUTO_BACKGROUND_ANALYSIS_PATTERNS)
+        has_narrow_scope = any(token in lowered for token in cls._AUTO_BACKGROUND_NARROW_PATTERNS)
+        return has_log_target and has_analysis_intent and not has_narrow_scope
+
+    @staticmethod
+    def _build_background_log_task(msg: InboundMessage) -> str:
+        """Create a focused subagent task for large local log analysis."""
+        scope_bits: list[str] = []
+        metadata = msg.metadata or {}
+        if metadata.get("case_id") or metadata.get("caseId"):
+            scope_bits.append(f"case={metadata.get('case_id') or metadata.get('caseId')}")
+        if metadata.get("artifact_id") or metadata.get("artifactId"):
+            scope_bits.append(f"artifact={metadata.get('artifact_id') or metadata.get('artifactId')}")
+        scope_text = f"Scope: {', '.join(scope_bits)}\n" if scope_bits else ""
+
+        return (
+            "Handle this as a large local log-analysis job running in the background.\n"
+            f"{scope_text}"
+            f"Original user request: {msg.content}\n\n"
+            "Requirements:\n"
+            "- Keep the foreground chat responsive.\n"
+            "- Do not dump raw Windows event logs into the conversation unless strictly necessary.\n"
+            "- Prefer filtered queries, counts, grouped findings, and structured summaries.\n"
+            "- When showing timestamps, include both UTC and Asia/Seoul (UTC+09:00).\n"
+            "- Focus on notable warnings/errors, repeated event IDs, boot/shutdown anomalies, and service or driver failures.\n"
+            "- Final user-facing result should be concise, forensic, and written in Korean."
+        )
+
     async def _process_message(
         self,
         msg: InboundMessage,
@@ -533,10 +682,16 @@ class AgentLoop:
             channel, chat_id = (msg.chat_id.split(":", 1) if ":" in msg.chat_id
                                 else ("cli", msg.chat_id))
             logger.info("Processing system message from {}", msg.sender_id)
-            key = f"{channel}:{chat_id}"
+            key = session_key or msg.session_key_override or f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+            self._set_tool_context(
+                channel,
+                chat_id,
+                msg.metadata.get("message_id"),
+                session_key=key,
+                metadata=msg.metadata,
+            )
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
             messages = self.context.build_messages(
@@ -547,12 +702,32 @@ class AgentLoop:
             final_content, _, all_msgs = await self._run_agent_loop(
                 messages, channel=channel, chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
+                session_key=key,
+                metadata=msg.metadata,
             )
-            self._save_turn(session, all_msgs, 1 + len(history))
+            turn_skip = 1 + len(history)
+            thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
+            self._save_turn(session, all_msgs, turn_skip)
+            self._archive_final_answer(
+                session_key=key,
+                channel=channel,
+                chat_id=chat_id,
+                request=msg.content,
+                answer=final_content or "Background task completed.",
+            )
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
-            return OutboundMessage(channel=channel, chat_id=chat_id,
-                                  content=final_content or "Background task completed.")
+            meta = dict(msg.metadata or {})
+            if thinking_text:
+                meta["thinking_text"] = thinking_text
+            if thinking_blocks:
+                meta["thinking_blocks"] = thinking_blocks
+            return OutboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                content=final_content or "Background task completed.",
+                metadata=meta,
+            )
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -566,9 +741,39 @@ class AgentLoop:
         if result := await self.commands.dispatch(ctx):
             return result
 
+        if self._should_auto_background_large_log_task(msg):
+            await self.subagents.spawn(
+                task=self._build_background_log_task(msg),
+                label="large-log-analysis",
+                origin_channel=msg.channel,
+                origin_chat_id=msg.chat_id,
+                session_key=key,
+                metadata={**(msg.metadata or {}), "_background_task": True},
+            )
+            ack = (
+                "대규모 시스템 로그 분석을 백그라운드로 시작했습니다. "
+                "이 세션이나 다른 세션에서 계속 작업하셔도 되고, 완료되면 같은 scope로 결과를 보내드리겠습니다."
+            )
+            session.add_message("user", msg.content)
+            session.add_message("assistant", ack)
+            self.sessions.save(session)
+            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=ack,
+                metadata={**(msg.metadata or {}), "render_as": "text"},
+            )
+
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        self._set_tool_context(
+            msg.channel,
+            msg.chat_id,
+            msg.metadata.get("message_id"),
+            session_key=key,
+            metadata=msg.metadata,
+        )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -596,14 +801,31 @@ class AgentLoop:
             on_stream_end=on_stream_end,
             channel=msg.channel, chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
+            session_key=key,
+            metadata=msg.metadata,
         )
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        self._save_turn(session, all_msgs, 1 + len(history))
-        self.sessions.save(session)
-        self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
+        turn_skip = 1 + len(history)
+        thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
+        self._save_turn(session, all_msgs, turn_skip)
+        self._archive_final_answer(
+            session_key=key,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            request=msg.content,
+            answer=final_content,
+        )
+
+        if self.reset_session_after_answer:
+            session.clear()
+            self.sessions.save(session)
+            self.sessions.invalidate(session.key)
+        else:
+            self.sessions.save(session)
+            self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
@@ -612,8 +834,10 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
-        if on_stream is not None:
-            meta["_streamed"] = True
+        if thinking_text:
+            meta["thinking_text"] = thinking_text
+        if thinking_blocks:
+            meta["thinking_blocks"] = thinking_blocks
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
             metadata=meta,
@@ -698,19 +922,85 @@ class AgentLoop:
             session.messages.append(entry)
         session.updated_at = datetime.now()
 
+    @staticmethod
+    def _collect_turn_thinking(
+        messages: list[dict[str, Any]],
+        *,
+        skip: int,
+    ) -> tuple[str | None, list[dict] | None]:
+        """Collect normalized thinking text from new assistant messages in the turn."""
+        parts: list[str] = []
+        blocks: list[dict] = []
+
+        for message in messages[skip:]:
+            if message.get("role") != "assistant":
+                continue
+            thinking_text = extract_message_thinking_text(message)
+            if thinking_text:
+                parts.append(thinking_text)
+            thinking_blocks = message.get("thinking_blocks")
+            if isinstance(thinking_blocks, list):
+                blocks.extend(block for block in thinking_blocks if isinstance(block, dict))
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for part in parts:
+            if part not in seen:
+                deduped.append(part)
+                seen.add(part)
+
+        return ("\n\n".join(deduped) if deduped else None, blocks or None)
+
+    def _archive_final_answer(
+        self,
+        *,
+        session_key: str,
+        channel: str,
+        chat_id: str,
+        request: str,
+        answer: str,
+    ) -> None:
+        """Persist the final answer as a markdown wiki note when enabled."""
+        if not self.wiki_archive:
+            return
+        try:
+            entry = self.wiki_archive.save_final_answer(
+                session_key=session_key,
+                channel=channel,
+                chat_id=chat_id,
+                request=request,
+                answer=answer,
+            )
+            logger.info("Archived final answer for {} to {}", session_key, entry.path)
+        except Exception:
+            logger.exception("Failed to archive final answer for {}", session_key)
+
     async def process_direct(
         self,
         content: str,
-        session_key: str = "cli:direct",
+        session_key: str | None = None,
         channel: str = "cli",
         chat_id: str = "direct",
+        case_id: str | None = None,
+        artifact_id: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
-        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+        metadata: dict[str, Any] = {}
+        if case_id:
+            metadata["case_id"] = case_id
+        if artifact_id:
+            metadata["artifact_id"] = artifact_id
+        msg = InboundMessage(
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            metadata=metadata,
+        )
         return await self._process_message(
             msg, session_key=session_key, on_progress=on_progress,
             on_stream=on_stream, on_stream_end=on_stream_end,

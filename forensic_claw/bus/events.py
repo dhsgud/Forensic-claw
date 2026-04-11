@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from forensic_claw.session.scopes import build_scoped_session_key
+
 
 @dataclass
 class InboundMessage:
@@ -21,7 +23,16 @@ class InboundMessage:
     @property
     def session_key(self) -> str:
         """Unique key for session identification."""
-        return self.session_key_override or f"{self.channel}:{self.chat_id}"
+        if self.session_key_override:
+            return self.session_key_override
+
+        metadata = self.metadata or {}
+        return build_scoped_session_key(
+            self.channel,
+            self.chat_id,
+            case_id=metadata.get("case_id") or metadata.get("caseId"),
+            artifact_id=metadata.get("artifact_id") or metadata.get("artifactId"),
+        )
 
 
 @dataclass

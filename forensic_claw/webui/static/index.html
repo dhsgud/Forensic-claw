@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Forensic-Claw Local Workbench</title>
+    <link rel="stylesheet" href="/ui/assets/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Local WebUI</p>
+          <h1>Forensic-Claw</h1>
+          <p class="subtle">case/artifact scope로 컨텍스트를 나누는 로컬 워크벤치</p>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title-row">
+            <h2>Session</h2>
+            <span id="session-badge" class="badge">loading</span>
+          </div>
+          <p id="session-meta" class="subtle">브라우저 세션을 준비하는 중입니다.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title-row">
+            <h2>Scope</h2>
+            <button id="clear-scope" class="ghost-button" type="button">Clear</button>
+          </div>
+          <label class="field">
+            <span>Case ID</span>
+            <input id="case-id" type="text" placeholder="case-2026-0001" list="case-suggestions">
+          </label>
+          <label class="field">
+            <span>Artifact ID</span>
+            <input id="artifact-id" type="text" placeholder="EVD-001" list="artifact-suggestions">
+          </label>
+          <p id="scope-summary" class="subtle">기본 브라우저 세션에 연결됩니다.</p>
+          <p class="subtle hint-line">`Enter` 전송 · `Shift+Enter` 줄바꿈</p>
+        </section>
+
+        <section class="panel cases-panel">
+          <div class="panel-title-row">
+            <h2>Cases</h2>
+            <button id="refresh-cases" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div id="cases-list" class="session-list"></div>
+        </section>
+
+        <section class="panel sessions-panel">
+          <div class="panel-title-row">
+            <h2>Recent Sessions</h2>
+            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div id="sessions-list" class="session-list"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Scoped Chat</p>
+            <h2 id="active-session-title">새 대화</h2>
+          </div>
+          <div class="header-status">
+            <span id="connection-status" class="status-pill">offline</span>
+            <span id="active-scope" class="scope-pill">base</span>
+          </div>
+        </header>
+
+        <section class="workspace-body">
+          <section id="chat-log" class="chat-log"></section>
+
+          <aside class="inspector">
+            <section class="panel inspector-panel">
+              <div class="panel-title-row">
+                <h2>Case Explorer</h2>
+                <span id="case-detail-status" class="badge">idle</span>
+              </div>
+              <p id="case-summary" class="subtle">선택된 case가 없습니다.</p>
+              <div id="case-detail" class="detail-stack"></div>
+              <div id="artifact-detail" class="detail-stack"></div>
+            </section>
+
+            <section class="panel inspector-panel">
+              <div class="panel-title-row">
+                <h2>Wiki Notes</h2>
+                <button id="refresh-wiki" class="ghost-button" type="button">Refresh</button>
+              </div>
+              <p id="wiki-summary" class="subtle">현재 scope에 저장된 note를 보여줍니다.</p>
+              <div id="wiki-list" class="note-list"></div>
+              <article id="wiki-preview" class="note-preview">
+                <div class="empty-state">저장된 wiki note를 선택하면 여기서 본문을 볼 수 있습니다.</div>
+              </article>
+            </section>
+          </aside>
+        </section>
+
+        <section class="composer-shell">
+          <div id="status-line" class="status-line">연결을 준비하는 중입니다.</div>
+          <div id="slash-menu" class="slash-menu" hidden></div>
+          <form id="composer" class="composer">
+            <textarea id="message-input" rows="4" placeholder="분석할 내용을 입력하세요"></textarea>
+            <button id="send-button" class="send-button" type="submit">Send</button>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <datalist id="case-suggestions"></datalist>
+    <datalist id="artifact-suggestions"></datalist>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message-meta"></div>
+        <pre class="message-content"></pre>
+      </article>
+    </template>
+
+    <script src="/ui/assets/app.js" defer></script>
+  </body>
+</html>

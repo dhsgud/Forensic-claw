@@ -14,6 +14,7 @@ from typing import Any
 from loguru import logger
 
 from forensic_claw.agent.tools.base import Tool
+from forensic_claw.utils.event_logs import compact_windows_event_log_output
 
 
 class ExecTool(Tool):
@@ -111,7 +112,8 @@ class ExecTool(Tool):
             output_parts: list[str] = []
 
             if stdout:
-                output_parts.append(self._decode_output(stdout))
+                stdout_text = self._decode_output(stdout)
+                output_parts.append(self._postprocess_stdout(stdout_text))
 
             if stderr:
                 stderr_text = self._decode_output(stderr)
@@ -132,6 +134,12 @@ class ExecTool(Tool):
             return result
         except Exception as e:
             return f"Error executing command: {e}"
+
+    @staticmethod
+    def _postprocess_stdout(text: str) -> str:
+        """Compact known verbose forensic outputs into a more LLM-friendly form."""
+        compacted = compact_windows_event_log_output(text)
+        return compacted or text
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()

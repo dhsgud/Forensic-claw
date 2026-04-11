@@ -18,6 +18,31 @@ def strip_think(text: str) -> str:
     return text.strip()
 
 
+def extract_think(text: str | None) -> str | None:
+    """Extract text inside <think>…</think> blocks, including an open trailing block."""
+    if not text:
+        return None
+
+    parts = [match.group(1).strip() for match in re.finditer(r"<think>([\s\S]*?)</think>", text)]
+    start = text.rfind("<think>")
+    end = text.rfind("</think>")
+    if start != -1 and start > end:
+        trailing = text[start + len("<think>") :].strip()
+        if trailing:
+            parts.append(trailing)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        if part and part not in seen:
+            deduped.append(part)
+            seen.add(part)
+
+    if not deduped:
+        return None
+    return "\n\n".join(deduped)
+
+
 def detect_image_mime(data: bytes) -> str | None:
     """Detect image MIME type from magic bytes, ignoring file extension."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -276,6 +301,50 @@ def build_assistant_message(
     if thinking_blocks:
         msg["thinking_blocks"] = thinking_blocks
     return msg
+
+
+def extract_thinking_text(
+    reasoning_content: str | None = None,
+    thinking_blocks: list[dict] | None = None,
+    text_content: str | None = None,
+) -> str | None:
+    """Flatten provider-specific reasoning fields into one display string."""
+    parts: list[str] = []
+
+    if isinstance(reasoning_content, str) and reasoning_content.strip():
+        parts.append(reasoning_content.strip())
+    think_text = extract_think(text_content)
+    if think_text:
+        parts.append(think_text)
+
+    for block in thinking_blocks or []:
+        if not isinstance(block, dict):
+            continue
+        for key in ("thinking", "thought", "text", "content"):
+            value = block.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+                break
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        if part not in seen:
+            deduped.append(part)
+            seen.add(part)
+
+    if not deduped:
+        return None
+    return "\n\n".join(deduped)
+
+
+def extract_message_thinking_text(message: dict[str, Any]) -> str | None:
+    """Read normalized thinking text from a persisted assistant message."""
+    return extract_thinking_text(
+        message.get("reasoning_content"),
+        message.get("thinking_blocks"),
+        message.get("content") if isinstance(message.get("content"), str) else None,
+    )
 
 
 def estimate_prompt_tokens(

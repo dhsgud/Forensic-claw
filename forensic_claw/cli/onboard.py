@@ -874,8 +874,10 @@ def _get_channel_config_class(channel: str) -> type[BaseModel] | None:
     return entry[1] if entry else None
 
 
-def _is_channel_enabled(channel: Any) -> bool:
+def _is_channel_enabled(channel: Any, channel_name: str | None = None) -> bool:
     """Return True when a channel config is enabled."""
+    if channel is None and channel_name == "webui":
+        return True
     if isinstance(channel, dict):
         return bool(channel.get("enabled", False))
     return bool(getattr(channel, "enabled", False))
@@ -908,7 +910,7 @@ def _prompt_channel_target(config: Config) -> str | None | object:
     default_label: str | None = None
 
     for name, display in _get_channel_names().items():
-        enabled = _is_channel_enabled(getattr(config.channels, name, None))
+        enabled = _is_channel_enabled(getattr(config.channels, name, None), name)
         label = f"{display} [enabled]" if enabled else display
         labels[label] = name
         if default_label is None:
@@ -1158,7 +1160,7 @@ def _looks_like_unconfigured_install(config: Config) -> bool:
         for name in _get_provider_names()
     )
     channel_ready = any(
-        _is_channel_enabled(getattr(config.channels, name, None))
+        _is_channel_enabled(getattr(config.channels, name, None), name)
         for name in _get_channel_names()
     )
     return (

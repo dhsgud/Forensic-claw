@@ -67,6 +67,8 @@ class AgentDefaults(Base):
     thinking_language: str = "en"
     response_language: str = "ko"
     enforce_response_language: bool = True
+    archive_final_answer_as_wiki: bool = False
+    reset_session_after_answer: bool = False
 
 
 class AgentsConfig(Base):

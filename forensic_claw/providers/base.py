@@ -93,6 +93,16 @@ class LLMProvider(ABC):
         "server error",
         "temporarily unavailable",
     )
+    _NON_TRANSIENT_ERROR_MARKERS = (
+        "exceeds the available context size",
+        "maximum context length",
+        "context length exceeded",
+        "context window",
+        "prompt is too long",
+        "too many tokens",
+        "reduce the length",
+        "input is too large",
+    )
 
     _SENTINEL = object()
 
@@ -194,6 +204,8 @@ class LLMProvider(ABC):
     @classmethod
     def _is_transient_error(cls, content: str | None) -> bool:
         err = (content or "").lower()
+        if any(marker in err for marker in cls._NON_TRANSIENT_ERROR_MARKERS):
+            return False
         return any(marker in err for marker in cls._TRANSIENT_ERROR_MARKERS)
 
     @staticmethod
@@ -237,6 +249,7 @@ class LLMProvider(ABC):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Stream a chat completion, calling *on_content_delta* for each text chunk.
 
@@ -252,6 +265,8 @@ class LLMProvider(ABC):
         )
         if on_content_delta and response.content:
             await on_content_delta(response.content)
+        if on_reasoning_delta and response.reasoning_content:
+            await on_reasoning_delta(response.reasoning_content)
         return response
 
     async def _safe_chat_stream(self, **kwargs: Any) -> LLMResponse:
@@ -273,6 +288,7 @@ class LLMProvider(ABC):
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Call chat_stream() with retry on transient provider failures."""
         if max_tokens is self._SENTINEL:
@@ -287,6 +303,7 @@ class LLMProvider(ABC):
             max_tokens=max_tokens, temperature=temperature,
             reasoning_effort=reasoning_effort, tool_choice=tool_choice,
             on_content_delta=on_content_delta,
+            on_reasoning_delta=on_reasoning_delta,
         )
 
         for attempt, delay in enumerate(self._CHAT_RETRY_DELAYS, start=1):

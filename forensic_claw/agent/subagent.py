@@ -58,6 +58,7 @@ class SubagentManager:
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background."""
         task_id = str(uuid.uuid4())[:8]
@@ -65,7 +66,7 @@ class SubagentManager:
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
 
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin)
+            self._run_subagent(task_id, task, display_label, origin, session_key=session_key, metadata=metadata)
         )
         self._running_tasks[task_id] = bg_task
         if session_key:
@@ -89,6 +90,9 @@ class SubagentManager:
         task: str,
         label: str,
         origin: dict[str, str],
+        *,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
@@ -162,12 +166,30 @@ class SubagentManager:
                 final_result = "Task completed but no final response was generated."
 
             logger.info("Subagent [{}] completed successfully", task_id)
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+            await self._announce_result(
+                task_id,
+                label,
+                task,
+                final_result,
+                origin,
+                "ok",
+                session_key=session_key,
+                metadata=metadata,
+            )
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
-            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+            await self._announce_result(
+                task_id,
+                label,
+                task,
+                error_msg,
+                origin,
+                "error",
+                session_key=session_key,
+                metadata=metadata,
+            )
 
     async def _announce_result(
         self,
@@ -177,6 +199,9 @@ class SubagentManager:
         result: str,
         origin: dict[str, str],
         status: str,
+        *,
+        session_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -196,6 +221,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             sender_id="subagent",
             chat_id=f"{origin['channel']}:{origin['chat_id']}",
             content=announce_content,
+            metadata=dict(metadata or {}),
+            session_key_override=session_key,
         )
 
         await self.bus.publish_inbound(msg)

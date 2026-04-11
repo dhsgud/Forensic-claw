@@ -11,6 +11,7 @@ from forensic_claw.bus.events import OutboundMessage
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.channels.base import BaseChannel
 from forensic_claw.config.schema import Config
+from forensic_claw.session.manager import SessionManager
 
 # Retry delays for message sending (exponential backoff: 1s, 2s, 4s)
 _SEND_RETRY_DELAYS = (1, 2, 4)
@@ -26,9 +27,15 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus):
+    def __init__(
+        self,
+        config: Config,
+        bus: MessageBus,
+        session_manager: SessionManager | None = None,
+    ):
         self.config = config
         self.bus = bus
+        self.session_manager = session_manager
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
 
@@ -40,6 +47,8 @@ class ChannelManager:
 
         for name, cls in discover_all().items():
             section = getattr(self.config.channels, name, None)
+            if section is None and name == "webui":
+                section = cls.default_config()
             if section is None:
                 continue
             enabled = (
@@ -51,6 +60,8 @@ class ChannelManager:
                 continue
             try:
                 channel = cls(section, self.bus)
+                if hasattr(channel, "bind_runtime"):
+                    channel.bind_runtime(session_manager=self.session_manager)
                 self.channels[name] = channel
                 logger.info("{} channel enabled", cls.display_name)
             except Exception as e:

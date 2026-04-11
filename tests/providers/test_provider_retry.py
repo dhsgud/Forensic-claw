@@ -65,6 +65,28 @@ async def test_chat_with_retry_does_not_retry_non_transient_error(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_chat_with_retry_does_not_retry_context_size_error_even_if_500(monkeypatch) -> None:
+    provider = ScriptedProvider([
+        LLMResponse(
+            content='error: {"error":{"code":500,"message":"the request exceeds the available context size"}}',
+            finish_reason="error",
+        ),
+    ])
+    delays: list[int] = []
+
+    async def _fake_sleep(delay: int) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("forensic_claw.providers.base.asyncio.sleep", _fake_sleep)
+
+    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
+
+    assert "context size" in (response.content or "")
+    assert provider.calls == 1
+    assert delays == []
+
+
+@pytest.mark.asyncio
 async def test_chat_with_retry_returns_final_error_after_retries(monkeypatch) -> None:
     provider = ScriptedProvider([
         LLMResponse(content="429 rate limit a", finish_reason="error"),
