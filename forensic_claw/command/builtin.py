@@ -101,9 +101,13 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop.sessions.invalidate(session.key)
     if snapshot:
         loop._schedule_background(loop.memory_consolidator.archive_messages(snapshot))
+    metadata = {}
+    if ctx.msg.channel == "webui":
+        metadata["webui_reset_browser_session"] = True
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content="New session started.",
+        metadata=metadata,
     )
 
 

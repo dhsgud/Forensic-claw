@@ -135,6 +135,45 @@ class ExecTool(Tool):
         except Exception as e:
             return f"Error executing command: {e}"
 
+    def describe_execution(
+        self,
+        *,
+        command: str,
+        working_dir: str | None = None,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """Describe how this tool will launch a shell command."""
+        cwd = working_dir or self.working_dir or os.getcwd()
+        effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
+
+        if sys.platform == "win32":
+            shell_exe = self._preferred_windows_shell()
+            return {
+                "command": command,
+                "workingDir": cwd,
+                "timeout": effective_timeout,
+                "platform": "windows",
+                "shell": Path(shell_exe).name or shell_exe,
+                "shellPath": shell_exe,
+                "launcher": (
+                    f"{shell_exe} -NoLogo -NoProfile -NonInteractive "
+                    "-ExecutionPolicy Bypass -EncodedCommand <base64>"
+                ),
+                "wrapper": "PowerShell wrapper enables UTF-8 console I/O before running the command.",
+            }
+
+        shell_exe = os.environ.get("SHELL") or "/bin/sh"
+        return {
+            "command": command,
+            "workingDir": cwd,
+            "timeout": effective_timeout,
+            "platform": "posix",
+            "shell": Path(shell_exe).name or shell_exe,
+            "shellPath": shell_exe,
+            "launcher": f"{shell_exe} -c <command>",
+            "wrapper": "The system shell runs the command with stdout and stderr captured.",
+        }
+
     @staticmethod
     def _postprocess_stdout(text: str) -> str:
         """Compact known verbose forensic outputs into a more LLM-friendly form."""

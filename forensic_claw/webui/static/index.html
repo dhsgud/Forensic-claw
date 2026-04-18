@@ -74,6 +74,19 @@
 
           <aside class="inspector">
             <section class="panel inspector-panel">
+              <details id="shell-trace-panel" class="trace-panel" open>
+                <summary class="trace-panel-summary">
+                  <span class="trace-panel-title">Shell Trace</span>
+                  <span id="shell-trace-count" class="badge">0</span>
+                </summary>
+                <p id="shell-trace-summary" class="subtle">LLM이 실행한 shell command를 실시간으로 보여줍니다.</p>
+                <div id="shell-trace-list" class="trace-list">
+                  <div class="empty-state">아직 shell 실행 로그가 없습니다.</div>
+                </div>
+              </details>
+            </section>
+
+            <section class="panel inspector-panel">
               <div class="panel-title-row">
                 <h2>Case Explorer</h2>
                 <span id="case-detail-status" class="badge">idle</span>

@@ -272,6 +272,73 @@ class AgentLoop:
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
     @staticmethod
+    def _summarize_shell_result(result: Any) -> tuple[str, int | None, str]:
+        """Normalize exec-tool outcomes for WebUI trace rendering."""
+        if isinstance(result, BaseException):
+            return "error", None, f"{type(result).__name__}: {result}"
+
+        text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        stripped = text.strip()
+        lower = stripped.lower()
+
+        exit_code = None
+        if match := re.search(r"Exit code:\s*(-?\d+)", text):
+            try:
+                exit_code = int(match.group(1))
+            except ValueError:
+                exit_code = None
+
+        if "timed out after" in lower:
+            status = "timed_out"
+        elif "blocked by safety guard" in lower:
+            status = "blocked"
+        elif stripped.startswith("Error"):
+            status = "error"
+        elif exit_code not in (None, 0):
+            status = "error"
+        else:
+            status = "completed"
+
+        summary = ""
+        for line in stripped.splitlines():
+            line = line.strip()
+            if not line or line.startswith("Exit code:"):
+                continue
+            summary = line
+            break
+        if not summary:
+            summary = f"Exit code {exit_code}" if exit_code is not None else "(no output)"
+        if len(summary) > 180:
+            summary = summary[:177].rstrip() + "..."
+        return status, exit_code, summary
+
+    def _build_shell_trace_callback(
+        self,
+        *,
+        channel: str,
+        chat_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> Callable[[dict[str, Any]], Awaitable[None]] | None:
+        """Create a WebUI-only publisher for shell execution trace events."""
+        if channel != "webui":
+            return None
+
+        async def _publish(trace: dict[str, Any]) -> None:
+            meta = dict(metadata or {})
+            meta["_shell_trace"] = True
+            meta["shell_trace"] = trace
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content="",
+                    metadata=meta,
+                )
+            )
+
+        return _publish
+
+    @staticmethod
     def _count_hangul(text: str) -> int:
         """Count Hangul syllables/jamo in text."""
         return sum(
@@ -330,6 +397,7 @@ class AgentLoop:
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        on_shell_trace: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         *,
         channel: str = "cli",
         chat_id: str = "direct",
@@ -459,6 +527,30 @@ class AgentLoop:
                     metadata=metadata,
                 )
 
+                exec_tool = self.tools.get("exec")
+                exec_started_at: dict[str, float] = {}
+                exec_plan_cache: dict[str, dict[str, Any]] = {}
+                if on_shell_trace and isinstance(exec_tool, ExecTool):
+                    for tc in response.tool_calls:
+                        if tc.name != "exec":
+                            continue
+                        args = tc.arguments if isinstance(tc.arguments, dict) else {}
+                        plan = exec_tool.describe_execution(
+                            command=str(args.get("command") or ""),
+                            working_dir=args.get("working_dir"),
+                            timeout=args.get("timeout"),
+                        )
+                        exec_plan_cache[tc.id] = plan
+                        exec_started_at[tc.id] = time.monotonic()
+                        await on_shell_trace(
+                            {
+                                "traceId": tc.id,
+                                "phase": "start",
+                                "status": "running",
+                                **plan,
+                            }
+                        )
+
                 # Execute all tool calls concurrently — the LLM batches
                 # independent calls in a single response on purpose.
                 # return_exceptions=True ensures all results are collected
@@ -469,6 +561,22 @@ class AgentLoop:
                 ), return_exceptions=True)
 
                 for tool_call, result in zip(response.tool_calls, results):
+                    if on_shell_trace and tool_call.name == "exec":
+                        status, exit_code, summary = self._summarize_shell_result(result)
+                        started = exec_started_at.get(tool_call.id)
+                        duration_ms = int((time.monotonic() - started) * 1000) if started else None
+                        trace = {
+                            "traceId": tool_call.id,
+                            "phase": "end",
+                            "status": status,
+                            "summary": summary,
+                            "durationMs": duration_ms,
+                            "exitCode": exit_code,
+                        }
+                        if tool_call.id in exec_plan_cache:
+                            trace.update(exec_plan_cache[tool_call.id])
+                        await on_shell_trace(trace)
+
                     if isinstance(result, BaseException):
                         result = f"Error: {type(result).__name__}: {result}"
                     messages = self.context.add_tool_result(
@@ -684,6 +792,11 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = session_key or msg.session_key_override or f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
+            shell_trace = self._build_shell_trace_callback(
+                channel=channel,
+                chat_id=chat_id,
+                metadata=msg.metadata,
+            )
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             self._set_tool_context(
                 channel,
@@ -704,6 +817,7 @@ class AgentLoop:
                 message_id=msg.metadata.get("message_id"),
                 session_key=key,
                 metadata=msg.metadata,
+                on_shell_trace=shell_trace,
             )
             turn_skip = 1 + len(history)
             thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
@@ -734,6 +848,11 @@ class AgentLoop:
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
+        shell_trace = self._build_shell_trace_callback(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            metadata=msg.metadata,
+        )
 
         # Slash commands
         raw = msg.content.strip()
@@ -799,6 +918,7 @@ class AgentLoop:
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
+            on_shell_trace=shell_trace,
             channel=msg.channel, chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
             session_key=key,

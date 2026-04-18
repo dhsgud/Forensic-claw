@@ -43,6 +43,7 @@ class WebUIChannel(BaseChannel):
 
     name = "webui"
     display_name = "WebUI"
+    _MAX_SHELL_TRACES = 200
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
@@ -57,6 +58,7 @@ class WebUIChannel(BaseChannel):
         self._site: web.TCPSite | None = None
         self._stop_event = asyncio.Event()
         self._sockets: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
+        self._shell_traces: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._session_manager: SessionManager | None = None
         self._app: web.Application | None = None
 
@@ -144,7 +146,15 @@ class WebUIChannel(BaseChannel):
         event["content"] = msg.content
         event["media"] = list(msg.media or [])
 
-        if metadata.get("_progress"):
+        if metadata.get("_shell_trace"):
+            event["type"] = "shell_trace"
+            event["trace"] = (
+                metadata.get("shell_trace")
+                if isinstance(metadata.get("shell_trace"), dict)
+                else {"summary": str(metadata.get("shell_trace") or "")}
+            )
+            self._remember_shell_trace(msg.chat_id, event)
+        elif metadata.get("_progress"):
             event["type"] = "tool_hint" if metadata.get("_tool_hint") else "progress"
         else:
             event["type"] = "message"
@@ -157,6 +167,8 @@ class WebUIChannel(BaseChannel):
                 event["thinkingText"] = metadata["thinking_text"]
             if metadata.get("thinking_blocks"):
                 event["thinkingBlocks"] = metadata["thinking_blocks"]
+            if metadata.get("webui_reset_browser_session"):
+                event["resetBrowserSession"] = True
 
         await self._emit_to_chat(msg.chat_id, event)
 
@@ -221,6 +233,34 @@ class WebUIChannel(BaseChannel):
             "timestamp": current_time_str(),
         }
 
+    def _remember_shell_trace(self, chat_id: str, event: dict[str, Any]) -> None:
+        """Keep a short in-memory history of shell trace events per browser session."""
+        trace_event = {
+            "type": "shell_trace",
+            "sessionId": event.get("sessionId"),
+            "sessionKey": event.get("sessionKey"),
+            "timestamp": event.get("timestamp"),
+            "trace": dict(event.get("trace") or {}),
+        }
+        bucket = self._shell_traces[chat_id]
+        bucket.append(trace_event)
+        if len(bucket) > self._MAX_SHELL_TRACES:
+            del bucket[:-self._MAX_SHELL_TRACES]
+
+    async def _drop_browser_state(self, session_id: str | None) -> None:
+        """Forget in-memory browser state after a hard reset."""
+        if not session_id:
+            return
+
+        self._shell_traces.pop(session_id, None)
+
+        sockets = list(self._sockets.pop(session_id, set()))
+        for ws in sockets:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
     async def _emit_to_chat(self, chat_id: str, event: dict[str, Any]) -> None:
         dead: list[web.WebSocketResponse] = []
         for ws in list(self._sockets.get(chat_id, set())):
@@ -246,6 +286,10 @@ class WebUIChannel(BaseChannel):
         if create:
             return self._new_browser_session_id()
         return None
+
+    @staticmethod
+    def _is_truthy(value: str | None) -> bool:
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     def _json_response(
         self,
@@ -569,7 +613,13 @@ class WebUIChannel(BaseChannel):
         return web.FileResponse(path)
 
     async def _handle_bootstrap(self, request: web.Request) -> web.Response:
-        session_id = self._browser_session_from_request(request, create=True)
+        reset_requested = self._is_truthy(request.query.get("reset"))
+        previous_session_id = self._browser_session_from_request(request, create=False)
+        if reset_requested:
+            await self._drop_browser_state(previous_session_id)
+            session_id = self._new_browser_session_id()
+        else:
+            session_id = previous_session_id or self._new_browser_session_id()
         cases_root = self._cases_root
         wiki_root = self._wiki_root
         has_cases = bool(cases_root and cases_root.is_dir() and any(cases_root.iterdir()))
@@ -595,6 +645,7 @@ class WebUIChannel(BaseChannel):
                     "hasCases": has_cases,
                     "hasWiki": has_wiki,
                 },
+                "shellTraces": list(self._shell_traces.get(session_id or "", [])) if session_id else [],
             },
             session_id=session_id,
         )

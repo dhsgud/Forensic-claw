@@ -472,6 +472,137 @@ textarea:focus {
   overflow: auto;
 }
 
+.trace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.trace-panel-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
+.trace-panel-title {
+  font-size: 1rem;
+}
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.trace-entry {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  padding: 12px 14px;
+}
+
+.trace-entry summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.trace-summary-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trace-command {
+  display: block;
+  line-height: 1.45;
+}
+
+.trace-summary-meta {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.trace-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.trace-pill.running {
+  background: rgba(140, 90, 43, 0.14);
+  color: var(--accent-strong);
+}
+
+.trace-pill.completed {
+  background: rgba(43, 119, 69, 0.14);
+  color: #215f39;
+}
+
+.trace-pill.timed_out,
+.trace-pill.blocked,
+.trace-pill.error {
+  background: rgba(160, 96, 15, 0.16);
+  color: #7a4706;
+}
+
+.trace-body {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trace-meta-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-meta-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.trace-meta-row span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.trace-meta-row code {
+  overflow-wrap: anywhere;
+}
+
+.trace-label,
+.trace-note {
+  margin: 0;
+}
+
+.trace-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trace-block {
+  max-height: 180px;
+}
+
 .empty-state {
   color: var(--muted);
   line-height: 1.5;

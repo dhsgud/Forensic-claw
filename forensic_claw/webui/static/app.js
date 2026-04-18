@@ -10,7 +10,10 @@ const state = {
   commands: [],
   activeCase: null,
   activeWikiNoteId: null,
+  shellTraces: [],
+  shellTraceMap: new Map(),
   slashSelection: 0,
+  isResettingSession: false,
 };
 
 const sessionBadge = document.querySelector("#session-badge");
@@ -35,6 +38,9 @@ const caseDetail = document.querySelector("#case-detail");
 const artifactDetail = document.querySelector("#artifact-detail");
 const caseSummary = document.querySelector("#case-summary");
 const caseDetailStatus = document.querySelector("#case-detail-status");
+const shellTraceCount = document.querySelector("#shell-trace-count");
+const shellTraceSummary = document.querySelector("#shell-trace-summary");
+const shellTraceList = document.querySelector("#shell-trace-list");
 const wikiSummary = document.querySelector("#wiki-summary");
 const wikiList = document.querySelector("#wiki-list");
 const wikiPreview = document.querySelector("#wiki-preview");
@@ -320,6 +326,171 @@ function parseSessionScope(sessionKey) {
   };
 }
 
+function formatTraceTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleTimeString("ko-KR", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function summarizeCommand(command) {
+  const text = String(command || "").trim().replace(/\s+/g, " ");
+  if (!text) return "(empty command)";
+  return text.length > 88 ? `${text.slice(0, 85)}...` : text;
+}
+
+function shellTraceStatusLabel(status) {
+  switch (status) {
+    case "running":
+      return "running";
+    case "completed":
+      return "completed";
+    case "timed_out":
+      return "timed out";
+    case "blocked":
+      return "blocked";
+    case "error":
+      return "error";
+    default:
+      return status || "pending";
+  }
+}
+
+function renderShellTraces() {
+  shellTraceCount.textContent = String(state.shellTraces.length);
+  shellTraceSummary.textContent =
+    state.shellTraces.length > 0
+      ? `현재 브라우저 세션에서 ${state.shellTraces.length}개의 shell 실행 로그를 추적 중입니다.`
+      : "LLM이 실행한 shell command를 실시간으로 보여줍니다.";
+
+  shellTraceList.innerHTML = "";
+  if (!state.shellTraces.length) {
+    setEmpty(shellTraceList, "아직 shell 실행 로그가 없습니다.");
+    return;
+  }
+
+  for (const trace of state.shellTraces) {
+    const scope = scopeLabel(parseSessionScope(trace.sessionKey || ""));
+    const traceStatus = trace.status || "pending";
+    const item = document.createElement("details");
+    item.className = "trace-entry";
+    if (trace.status === "running") {
+      item.open = true;
+    }
+
+    const summary = document.createElement("summary");
+    summary.innerHTML = `
+      <span class="trace-summary-row">
+        <strong class="trace-command">${escapeHtml(summarizeCommand(trace.command))}</strong>
+        <span class="trace-pill ${traceStatus}">${escapeHtml(shellTraceStatusLabel(trace.status))}</span>
+      </span>
+      <small class="trace-summary-meta">${escapeHtml([scope, trace.shell, formatTraceTime(trace.lastUpdatedAt || trace.startedAt)].filter(Boolean).join(" · "))}</small>
+    `;
+    item.appendChild(summary);
+
+    const body = document.createElement("div");
+    body.className = "trace-body";
+
+    const meta = document.createElement("div");
+    meta.className = "trace-meta-grid";
+    const rows = [
+      ["Scope", scope],
+      ["Shell", trace.shellPath || trace.shell || ""],
+      ["Working Dir", trace.workingDir || ""],
+      ["Timeout", trace.timeout != null ? `${trace.timeout}s` : ""],
+      ["Exit Code", trace.exitCode != null ? String(trace.exitCode) : ""],
+      ["Duration", trace.durationMs != null ? `${trace.durationMs} ms` : ""],
+      ["Updated", trace.lastUpdatedAt || trace.endedAt || trace.startedAt || ""],
+    ].filter(([, value]) => value);
+    for (const [label, value] of rows) {
+      const row = document.createElement("div");
+      row.className = "trace-meta-row";
+      row.innerHTML = `
+        <span>${escapeHtml(label)}</span>
+        <code>${escapeHtml(String(value))}</code>
+      `;
+      meta.appendChild(row);
+    }
+    body.appendChild(meta);
+
+    if (trace.summary) {
+      const summaryBlock = document.createElement("p");
+      summaryBlock.className = "trace-note";
+      summaryBlock.textContent = trace.summary;
+      body.appendChild(summaryBlock);
+    }
+
+    const commandBlock = document.createElement("pre");
+    commandBlock.className = "detail-block trace-block";
+    commandBlock.textContent = trace.command || "";
+    body.appendChild(commandBlock);
+
+    if (trace.launcher) {
+      const launcherLabel = document.createElement("p");
+      launcherLabel.className = "trace-label";
+      launcherLabel.textContent = "Launcher";
+      body.appendChild(launcherLabel);
+
+      const launcherBlock = document.createElement("pre");
+      launcherBlock.className = "detail-block trace-block";
+      launcherBlock.textContent = trace.launcher;
+      body.appendChild(launcherBlock);
+    }
+
+    if (trace.wrapper) {
+      const wrapper = document.createElement("p");
+      wrapper.className = "trace-note subtle";
+      wrapper.textContent = trace.wrapper;
+      body.appendChild(wrapper);
+    }
+
+    item.appendChild(body);
+    shellTraceList.appendChild(item);
+  }
+}
+
+function ingestShellTrace(event) {
+  const incoming = event.trace || {};
+  const storageKey = `${event.sessionKey || "base"}::${incoming.traceId || event.timestamp || Math.random()}`;
+  let trace = state.shellTraceMap.get(storageKey);
+  if (!trace) {
+    trace = {
+      key: storageKey,
+      sessionKey: event.sessionKey || "",
+      startedAt: incoming.phase === "start" ? event.timestamp : "",
+      endedAt: "",
+      lastUpdatedAt: event.timestamp || "",
+    };
+    state.shellTraceMap.set(storageKey, trace);
+    state.shellTraces.unshift(trace);
+  }
+
+  Object.assign(trace, incoming);
+  trace.sessionKey = event.sessionKey || trace.sessionKey || "";
+  trace.lastUpdatedAt = event.timestamp || trace.lastUpdatedAt || "";
+  if (incoming.phase === "start" && !trace.startedAt) {
+    trace.startedAt = event.timestamp || trace.startedAt;
+  }
+  if (incoming.phase === "end") {
+    trace.endedAt = event.timestamp || trace.endedAt;
+  }
+
+  state.shellTraces.sort((a, b) => String(b.lastUpdatedAt || "").localeCompare(String(a.lastUpdatedAt || "")));
+  if (state.shellTraces.length > 120) {
+    for (const stale of state.shellTraces.splice(120)) {
+      state.shellTraceMap.delete(stale.key);
+    }
+  }
+  renderShellTraces();
+}
+
 function refreshSuggestionLists() {
   const caseIds = new Set();
   for (const item of state.cases) {
@@ -559,21 +730,52 @@ function renderWikiNote(note) {
   `;
 }
 
-async function bootstrap() {
-  const data = await apiJson("/api/bootstrap");
+function resetUiForFreshBrowserSession() {
+  state.activeSessionKey = null;
+  state.pendingAssistant = null;
+  state.streamNodes.clear();
+  state.activeWikiNoteId = null;
+  chatLog.innerHTML = "";
+  caseIdInput.value = "";
+  artifactIdInput.value = "";
+  activeSessionTitle.textContent = "새 브라우저 세션";
+  clearCaseDetail();
+  updateScopeSummary();
+  wikiSummary.textContent = "새 WebUI 세션입니다.";
+  wikiList.innerHTML = "";
+  wikiPreview.innerHTML =
+    '<div class="empty-state">저장된 wiki note를 선택하면 여기서 본문을 볼 수 있습니다.</div>';
+}
+
+async function bootstrap({ reset = false } = {}) {
+  const data = await apiJson(reset ? "/api/bootstrap?reset=1" : "/api/bootstrap");
   state.sessionId = data.sessionId;
   state.commands = data.commands || [];
+  state.shellTraces = [];
+  state.shellTraceMap = new Map();
+  if (reset) {
+    resetUiForFreshBrowserSession();
+  }
+  for (const event of data.shellTraces || []) {
+    ingestShellTrace(event);
+  }
+  renderShellTraces();
   sessionBadge.textContent = data.sessionId;
   sessionMeta.textContent = `브라우저 세션 ${data.sessionId}`;
   updateScopeSummary();
   await connectSocket();
   await Promise.all([refreshSessions(), refreshCases(), refreshWikiNotes()]);
-  setStatus("준비되었습니다.");
+  setStatus(reset ? "새 WebUI 세션을 시작했습니다." : "준비되었습니다.");
 }
 
 async function connectSocket() {
   if (state.socket) {
-    state.socket.close();
+    try {
+      state.socket.close();
+    } catch (_error) {
+      // Ignore stale socket shutdown errors during reconnect.
+    }
+    state.socket = null;
   }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -587,6 +789,9 @@ async function connectSocket() {
 
   state.socket.addEventListener("close", () => {
     setConnection(false);
+    if (state.isResettingSession) {
+      return;
+    }
     setStatus("연결이 끊어졌습니다. 새로고침 후 다시 시도하세요.");
   });
 
@@ -596,6 +801,28 @@ async function connectSocket() {
   });
 }
 
+async function resetBrowserSession() {
+  if (state.isResettingSession) {
+    return;
+  }
+
+  state.isResettingSession = true;
+  setStatus("새 WebUI 세션으로 전환하는 중입니다.");
+  try {
+    if (state.socket) {
+      try {
+        state.socket.close();
+      } catch (_error) {
+        // Ignore reconnect shutdown errors.
+      }
+      state.socket = null;
+    }
+    await bootstrap({ reset: true });
+  } finally {
+    state.isResettingSession = false;
+  }
+}
+
 function handleSocketEvent(event) {
   if (event.type === "ready") {
     setConnection(true);
@@ -603,6 +830,16 @@ function handleSocketEvent(event) {
   }
 
   if (event.sessionId && event.sessionId !== state.sessionId) {
+    return;
+  }
+
+  if (event.type === "shell_trace") {
+    ingestShellTrace(event);
+    setStatus(
+      event.trace?.phase === "start"
+        ? "쉘 명령 실행 로그를 기록했습니다."
+        : "쉘 명령 실행 결과가 업데이트되었습니다."
+    );
     return;
   }
 
@@ -676,6 +913,14 @@ function handleSocketEvent(event) {
     finalizeAssistantNode(node);
     if (event.thinkingText) {
       setThinkingText(node, event.thinkingText);
+    }
+    if (event.resetBrowserSession) {
+      setStatus("새 WebUI 세션으로 전환하는 중입니다.");
+      resetBrowserSession().catch((error) => {
+        console.error(error);
+        setStatus(`세션 초기화 실패: ${error.message}`);
+      });
+      return;
     }
     setStatus("응답이 완료되었습니다.");
     refreshSessions();

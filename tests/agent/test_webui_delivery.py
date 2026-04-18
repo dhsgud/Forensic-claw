@@ -7,7 +7,7 @@ import pytest
 from forensic_claw.agent.loop import AgentLoop
 from forensic_claw.bus.events import InboundMessage
 from forensic_claw.bus.queue import MessageBus
-from forensic_claw.providers.base import GenerationSettings, LLMResponse
+from forensic_claw.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 
 
 def _make_loop(tmp_path) -> tuple[AgentLoop, MessageBus, MagicMock]:
@@ -148,3 +148,71 @@ async def test_webui_streams_reasoning_delta_from_provider_field(tmp_path) -> No
     assert end.metadata.get("_stream_end") is True
     assert final.content == "실시간 답변"
     assert final.metadata.get("thinking_text") == "분석 1 + 분석 2"
+
+
+@pytest.mark.asyncio
+async def test_webui_emits_shell_trace_events_for_exec_tool(tmp_path) -> None:
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=0)
+
+    calls = iter(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_exec_1",
+                        name="exec",
+                        arguments={
+                            "command": "Get-Date",
+                            "working_dir": str(tmp_path),
+                            "timeout": 12,
+                        },
+                    )
+                ],
+            ),
+            LLMResponse(content="완료", tool_calls=[]),
+        ]
+    )
+    provider.chat_with_retry = AsyncMock(side_effect=lambda *a, **kw: next(calls))
+    provider.chat_stream_with_retry = AsyncMock(side_effect=lambda *a, **kw: next(calls))
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="test-model",
+        enforce_response_language=False,
+    )
+    exec_tool = loop.tools.get("exec")
+    assert exec_tool is not None
+    exec_tool.execute = AsyncMock(return_value="현재 시각\n\nExit code: 0")
+
+    msg = InboundMessage(
+        channel="webui",
+        sender_id="user",
+        chat_id="sess_trace",
+        content="날짜 확인",
+    )
+
+    await loop._dispatch(msg)
+
+    progress = await loop.bus.consume_outbound()
+    trace_start = await loop.bus.consume_outbound()
+    trace_end = await loop.bus.consume_outbound()
+    final = await loop.bus.consume_outbound()
+
+    assert progress.metadata.get("_progress") is True
+    assert trace_start.metadata.get("_shell_trace") is True
+    assert trace_start.metadata["shell_trace"]["phase"] == "start"
+    assert trace_start.metadata["shell_trace"]["command"] == "Get-Date"
+    assert "EncodedCommand" in trace_start.metadata["shell_trace"]["launcher"] or "-c <command>" in trace_start.metadata["shell_trace"]["launcher"]
+
+    assert trace_end.metadata.get("_shell_trace") is True
+    assert trace_end.metadata["shell_trace"]["phase"] == "end"
+    assert trace_end.metadata["shell_trace"]["status"] == "completed"
+    assert trace_end.metadata["shell_trace"]["exitCode"] == 0
+    assert trace_end.metadata["shell_trace"]["durationMs"] >= 0
+
+    assert final.content == "완료"

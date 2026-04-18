@@ -211,6 +211,112 @@ async def test_webui_ws_receives_progress_message_and_stream_events(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_webui_message_can_request_browser_session_reset(tmp_path: Path) -> None:
+    channel, _bus, _session_manager, client = await _make_client(tmp_path)
+
+    try:
+        session_id = (await (await client.get("/api/bootstrap")).json())["sessionId"]
+        ws = await client.ws_connect(f"/ws?sessionId={session_id}")
+        await ws.receive_json()
+
+        await channel.send(
+            OutboundMessage(
+                channel="webui",
+                chat_id=session_id,
+                content="New session started.",
+                metadata={"webui_reset_browser_session": True},
+            )
+        )
+        message = await ws.receive_json()
+        assert message["type"] == "message"
+        assert message["resetBrowserSession"] is True
+
+        await ws.close()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_ws_receives_shell_trace_and_bootstrap_replays_it(tmp_path: Path) -> None:
+    channel, _bus, _session_manager, client = await _make_client(tmp_path)
+
+    try:
+        session_id = (await (await client.get("/api/bootstrap")).json())["sessionId"]
+        ws = await client.ws_connect(f"/ws?sessionId={session_id}")
+        await ws.receive_json()
+
+        await channel.send(
+            OutboundMessage(
+                channel="webui",
+                chat_id=session_id,
+                content="",
+                metadata={
+                    "_shell_trace": True,
+                    "case_id": "Case Alpha",
+                    "artifact_id": "EVD-001",
+                    "shell_trace": {
+                        "traceId": "call_exec_1",
+                        "phase": "start",
+                        "status": "running",
+                        "command": "Get-Date",
+                        "workingDir": str(tmp_path),
+                        "timeout": 30,
+                        "shell": "powershell",
+                        "launcher": "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <base64>",
+                    },
+                },
+            )
+        )
+
+        trace_event = await ws.receive_json()
+        assert trace_event["type"] == "shell_trace"
+        assert trace_event["trace"]["command"] == "Get-Date"
+        assert trace_event["sessionKey"] == f"webui:{session_id}:case:Case-Alpha:artifact:EVD-001"
+
+        bootstrap = await (await client.get("/api/bootstrap", params={"sessionId": session_id})).json()
+        assert bootstrap["shellTraces"][0]["trace"]["traceId"] == "call_exec_1"
+        assert bootstrap["shellTraces"][0]["trace"]["status"] == "running"
+
+        await ws.close()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_bootstrap_reset_rotates_browser_session_and_clears_shell_traces(tmp_path: Path) -> None:
+    channel, _bus, _session_manager, client = await _make_client(tmp_path)
+
+    try:
+        initial_bootstrap = await (await client.get("/api/bootstrap")).json()
+        session_id = initial_bootstrap["sessionId"]
+
+        await channel.send(
+            OutboundMessage(
+                channel="webui",
+                chat_id=session_id,
+                content="",
+                metadata={
+                    "_shell_trace": True,
+                    "shell_trace": {
+                        "traceId": "call_exec_1",
+                        "phase": "start",
+                        "status": "running",
+                        "command": "Get-Date",
+                    },
+                },
+            )
+        )
+
+        reset_bootstrap = await (
+            await client.get("/api/bootstrap", params={"reset": "1", "sessionId": session_id})
+        ).json()
+        assert reset_bootstrap["sessionId"] != session_id
+        assert reset_bootstrap["shellTraces"] == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_webui_sessions_api_filters_to_browser_session(tmp_path: Path) -> None:
     _channel, _bus, session_manager, client = await _make_client(tmp_path)
 
