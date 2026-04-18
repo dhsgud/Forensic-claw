@@ -79,6 +79,7 @@ class WebUIChannel(BaseChannel):
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/api/bootstrap", self._handle_bootstrap)
         app.router.add_post("/api/chat", self._handle_chat)
+        app.router.add_post("/api/stop", self._handle_stop)
         app.router.add_get("/api/cases", self._handle_cases_list)
         app.router.add_get("/api/cases/{case_id}", self._handle_case_detail)
         app.router.add_get("/api/cases/{case_id}/report", self._handle_case_report)
@@ -676,6 +677,45 @@ class WebUIChannel(BaseChannel):
             sender_id=session_id,
             chat_id=session_id,
             content=text,
+            metadata=metadata,
+        )
+
+        return self._json_response(
+            {
+                "ok": True,
+                "sessionId": session_id,
+                "sessionKey": build_scoped_session_key(
+                    self.name,
+                    session_id,
+                    case_id=case_id,
+                    artifact_id=artifact_id,
+                ),
+            },
+            session_id=session_id,
+        )
+
+    async def _handle_stop(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
+
+        session_id = body.get("sessionId") or self._browser_session_from_request(request, create=False)
+        case_id = body.get("caseId") or body.get("case_id")
+        artifact_id = body.get("artifactId") or body.get("artifact_id")
+
+        if not session_id:
+            return self._json_response({"ok": False, "error": "missing_session"}, status=400)
+
+        metadata = {
+            **({"case_id": case_id} if case_id else {}),
+            **({"artifact_id": artifact_id} if artifact_id else {}),
+        }
+
+        await self._handle_message(
+            sender_id=session_id,
+            chat_id=session_id,
+            content="/stop",
             metadata=metadata,
         )
 

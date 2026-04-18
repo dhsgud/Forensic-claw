@@ -25,6 +25,10 @@ botpy.log
 nano.*.save
 .DS_Store
 uv.lock
+/.codex/
+/node_modules/
+/package.json
+/package-lock.json
 *.E01
 *.E0?
 *.dd

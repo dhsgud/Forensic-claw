@@ -138,6 +138,38 @@ async def test_webui_bootstrap_and_chat_publish_scoped_inbound(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_webui_stop_publishes_priority_message_for_scoped_session(tmp_path: Path) -> None:
+    channel, bus, _session_manager, client = await _make_client(tmp_path)
+
+    try:
+        response = await client.get("/api/bootstrap")
+        assert response.status == 200
+        session_id = (await response.json())["sessionId"]
+
+        response = await client.post(
+            "/api/stop",
+            json={
+                "sessionId": session_id,
+                "caseId": "Case Alpha",
+                "artifactId": "Prefetch #1",
+            },
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["ok"] is True
+        assert payload["sessionKey"] == f"webui:{session_id}:case:Case-Alpha:artifact:Prefetch-1"
+
+        inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+        assert inbound.chat_id == session_id
+        assert inbound.content == "/stop"
+        assert inbound.metadata["case_id"] == "Case Alpha"
+        assert inbound.metadata["artifact_id"] == "Prefetch #1"
+        assert inbound.session_key == f"webui:{session_id}:case:Case-Alpha:artifact:Prefetch-1"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_webui_ws_receives_progress_message_and_stream_events(tmp_path: Path) -> None:
     channel, _bus, _session_manager, client = await _make_client(tmp_path)
 

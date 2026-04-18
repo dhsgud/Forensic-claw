@@ -226,6 +226,20 @@ textarea:focus {
   box-shadow: 0 12px 28px rgba(127, 82, 39, 0.22);
 }
 
+.send-button.is-stop {
+  background: rgba(255, 248, 238, 0.92);
+  color: var(--accent-strong);
+  border: 1px solid rgba(140, 90, 43, 0.22);
+  box-shadow: none;
+}
+
+.ghost-button:disabled,
+.send-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .chat-log {
   min-height: 0;
   overflow: auto;
@@ -256,6 +270,11 @@ textarea:focus {
   background: linear-gradient(135deg, rgba(255, 252, 247, 0.92), rgba(246, 235, 219, 0.8));
 }
 
+.message.stopped {
+  border-color: rgba(160, 96, 15, 0.22);
+  background: linear-gradient(135deg, rgba(255, 249, 240, 0.92), rgba(244, 233, 215, 0.78));
+}
+
 .message.tool {
   background: rgba(76, 70, 57, 0.06);
   border-style: dashed;
@@ -277,10 +296,130 @@ textarea:focus {
 
 .message-content {
   margin: 0;
-  white-space: pre-wrap;
   word-break: break-word;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  overflow-wrap: anywhere;
   line-height: 1.55;
+}
+
+.message-plain {
+  white-space: pre-wrap;
+}
+
+.message-markdown {
+  white-space: normal;
+}
+
+.markdown-rendered {
+  font-family: "Aptos", "Segoe UI", "Helvetica Neue", sans-serif;
+  line-height: 1.7;
+}
+
+.markdown-rendered > :first-child {
+  margin-top: 0;
+}
+
+.markdown-rendered > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-rendered h1,
+.markdown-rendered h2,
+.markdown-rendered h3,
+.markdown-rendered h4,
+.markdown-rendered h5,
+.markdown-rendered h6 {
+  margin: 1.1rem 0 0.65rem;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+}
+
+.markdown-rendered h1 {
+  font-size: 1.45rem;
+}
+
+.markdown-rendered h2 {
+  font-size: 1.24rem;
+}
+
+.markdown-rendered h3 {
+  font-size: 1.08rem;
+}
+
+.markdown-rendered p,
+.markdown-rendered ul,
+.markdown-rendered ol,
+.markdown-rendered blockquote,
+.markdown-rendered pre,
+.markdown-rendered hr {
+  margin: 0 0 0.95rem;
+}
+
+.markdown-rendered ul,
+.markdown-rendered ol {
+  padding-left: 1.35rem;
+}
+
+.markdown-rendered li + li {
+  margin-top: 0.28rem;
+}
+
+.markdown-rendered a {
+  color: var(--accent-strong);
+  font-weight: 600;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
+.markdown-rendered blockquote {
+  padding: 0.9rem 1rem;
+  border-left: 4px solid rgba(140, 90, 43, 0.3);
+  border-radius: 0 14px 14px 0;
+  background: rgba(140, 90, 43, 0.08);
+  color: #574632;
+}
+
+.markdown-rendered code {
+  padding: 0.1rem 0.4rem;
+  border-radius: 8px;
+  background: rgba(43, 36, 25, 0.08);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.markdown-rendered pre {
+  padding: 1rem;
+  border: 1px solid rgba(43, 36, 25, 0.1);
+  border-radius: 16px;
+  background: rgba(43, 36, 25, 0.92);
+  color: #f8f4eb;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.markdown-rendered pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-code-block[data-language]::before {
+  content: attr(data-language);
+  display: inline-block;
+  margin-bottom: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(248, 244, 235, 0.82);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.markdown-rendered hr {
+  border: none;
+  border-top: 1px solid rgba(43, 36, 25, 0.12);
 }
 
 .message-thinking {
@@ -470,6 +609,14 @@ textarea:focus {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.64);
   overflow: auto;
+}
+
+.note-markdown {
+  margin-top: 10px;
+}
+
+.detail-markdown {
+  margin-top: 10px;
 }
 
 .trace-panel {

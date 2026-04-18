@@ -14,6 +14,10 @@ const state = {
   shellTraceMap: new Map(),
   slashSelection: 0,
   isResettingSession: false,
+  isGenerating: false,
+  isStopping: false,
+  stopRequested: false,
+  stopTargetSessionKey: null,
 };
 
 const sessionBadge = document.querySelector("#session-badge");
@@ -65,6 +69,193 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;");
 }
 
+function escapeAttribute(text) {
+  return escapeHtml(text).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+
+function sanitizeMarkdownUrl(url) {
+  const value = String(url || "").trim();
+  if (!value) return null;
+  if (value.startsWith("#") || value.startsWith("/")) {
+    return value;
+  }
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (["http:", "https:", "mailto:"].includes(parsed.protocol)) {
+      return parsed.href;
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+}
+
+function restoreMarkdownTokens(text, replacements) {
+  return text.replace(/@@MDTOKEN_(\d+)@@/g, (_match, index) => replacements[Number(index)] || "");
+}
+
+function renderInlineMarkdown(text) {
+  let working = String(text || "");
+  const replacements = [];
+  const token = (html) => {
+    const marker = `@@MDTOKEN_${replacements.length}@@`;
+    replacements.push(html);
+    return marker;
+  };
+
+  working = working.replace(/`([^`\n]+)`/g, (_match, code) => {
+    return token(`<code>${escapeHtml(code)}</code>`);
+  });
+
+  working = working.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match, label, url) => {
+    const safeUrl = sanitizeMarkdownUrl(url);
+    if (!safeUrl) {
+      return `${label} (${url})`;
+    }
+    return token(
+      `<a href="${escapeAttribute(safeUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`
+    );
+  });
+
+  working = escapeHtml(working);
+  working = working.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  working = working.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  working = working.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  working = working.replace(
+    /(^|[\s(>])((?:https?:\/\/)[^\s<]+)(?=$|[\s),.:;!?])/g,
+    (_match, prefix, rawUrl) => {
+      const safeUrl = sanitizeMarkdownUrl(rawUrl);
+      if (!safeUrl) {
+        return `${prefix}${rawUrl}`;
+      }
+      return `${prefix}${token(
+        `<a href="${escapeAttribute(safeUrl)}" target="_blank" rel="noreferrer noopener">${escapeHtml(rawUrl)}</a>`
+      )}`;
+    }
+  );
+
+  return restoreMarkdownTokens(working, replacements);
+}
+
+function isMarkdownBlockBoundary(line) {
+  const trimmed = String(line || "").trim();
+  return (
+    !trimmed ||
+    /^```/.test(trimmed) ||
+    /^(#{1,6})\s+/.test(trimmed) ||
+    /^>\s?/.test(trimmed) ||
+    /^[-*+]\s+/.test(trimmed) ||
+    /^\d+\.\s+/.test(trimmed) ||
+    /^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)
+  );
+}
+
+function renderMarkdown(text) {
+  const source = String(text || "").replace(/\r\n?/g, "\n").trim();
+  if (!source) {
+    return "";
+  }
+
+  const lines = source.split("\n");
+  const blocks = [];
+
+  for (let index = 0; index < lines.length;) {
+    const rawLine = lines[index];
+    const trimmed = rawLine.trim();
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fence = trimmed.match(/^```([\w.-]+)?\s*$/);
+    if (fence) {
+      const language = fence[1] || "";
+      index += 1;
+      const codeLines = [];
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      const languageAttr = language ? ` data-language="${escapeAttribute(language)}"` : "";
+      blocks.push(
+        `<pre class="markdown-code-block"${languageAttr}><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`
+      );
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      blocks.push("<hr>");
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      const quoteLines = [];
+      while (index < lines.length && /^>\s?/.test(lines[index].trim())) {
+        quoteLines.push(lines[index].trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"))}</blockquote>`);
+      continue;
+    }
+
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const items = [];
+      while (index < lines.length && /^[-*+]\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^[-*+]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(`<ul>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ul>`);
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items = [];
+      while (index < lines.length && /^\d+\.\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^\d+\.\s+/, ""));
+        index += 1;
+      }
+      blocks.push(`<ol>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</ol>`);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length && !isMarkdownBlockBoundary(lines[index])) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    blocks.push(`<p>${paragraphLines.map((line) => renderInlineMarkdown(line)).join("<br>")}</p>`);
+  }
+
+  return blocks.join("");
+}
+
+function renderPlainText(text) {
+  return escapeHtml(String(text || "")).replace(/\n/g, "<br>");
+}
+
+function contentNodeFor(node) {
+  return node.querySelector(".message-content");
+}
+
+function roleForNode(node) {
+  if (node.classList.contains("user")) return "user";
+  if (node.classList.contains("tool")) return "tool";
+  return "assistant";
+}
+
 function setStatus(text) {
   statusLine.textContent = text;
 }
@@ -72,6 +263,76 @@ function setStatus(text) {
 function setConnection(online) {
   connectionStatus.textContent = online ? "online" : "offline";
   connectionStatus.classList.toggle("online", online);
+}
+
+function updateComposerActions() {
+  sendButton.disabled = !state.sessionId || state.isStopping;
+  sendButton.textContent = state.isStopping ? "Stopping..." : state.isGenerating ? "Stop" : "Send";
+  sendButton.classList.toggle("is-stop", state.isGenerating || state.isStopping);
+  sendButton.setAttribute(
+    "aria-label",
+    state.isStopping ? "Stopping response generation" : state.isGenerating ? "Stop response generation" : "Send message"
+  );
+}
+
+function beginGeneration() {
+  state.isGenerating = true;
+  state.isStopping = false;
+  state.stopRequested = false;
+  state.stopTargetSessionKey = null;
+  updateComposerActions();
+}
+
+function finishGeneration() {
+  state.isGenerating = false;
+  state.isStopping = false;
+  state.stopRequested = false;
+  state.stopTargetSessionKey = null;
+  updateComposerActions();
+}
+
+function stopScope() {
+  if (state.activeSessionKey) {
+    return parseSessionScope(state.activeSessionKey);
+  }
+  return currentScope();
+}
+
+function freezeAssistantNode(node) {
+  if (!node) return;
+
+  finalizeAssistantNode(node);
+  node.classList.remove("streaming");
+  node.classList.add("stopped");
+
+  const current = messageContentText(node).trim();
+  if (!current || current === "답변중..." || current === "답변을 준비하는 중입니다...") {
+    setMessageContent(node, "응답 생성이 중지되었습니다.");
+  }
+  setMessageMeta(node, "assistant / stopped");
+}
+
+function freezeLiveAssistantNodes() {
+  const seen = new Set();
+  for (const node of state.streamNodes.values()) {
+    if (seen.has(node)) continue;
+    freezeAssistantNode(node);
+    seen.add(node);
+  }
+  if (state.pendingAssistant && !seen.has(state.pendingAssistant)) {
+    freezeAssistantNode(state.pendingAssistant);
+  }
+  state.streamNodes.clear();
+  state.pendingAssistant = null;
+}
+
+function clearPlaceholderThinking(node) {
+  const details = node.querySelector(".message-thinking");
+  const thoughtNode = details?.querySelector(".thinking-content");
+  const text = String(thoughtNode?.textContent || "").trim();
+  if (details && (!text || text === "생각 중...")) {
+    details.remove();
+  }
 }
 
 function setEmpty(container, text) {
@@ -83,11 +344,28 @@ function setMessageMeta(node, text) {
 }
 
 function setMessageContent(node, text) {
-  node.querySelector(".message-content").textContent = text;
+  const contentNode = contentNodeFor(node);
+  if (!contentNode) return;
+  const role = roleForNode(node);
+  const rawText = String(text || "");
+  contentNode.dataset.rawText = rawText;
+
+  if (role === "assistant") {
+    contentNode.innerHTML = renderMarkdown(rawText);
+    contentNode.classList.remove("message-plain");
+    contentNode.classList.add("message-markdown", "markdown-rendered");
+    return;
+  }
+
+  contentNode.innerHTML = renderPlainText(rawText);
+  contentNode.classList.remove("message-markdown", "markdown-rendered");
+  contentNode.classList.add("message-plain");
 }
 
 function messageContentText(node) {
-  return node.querySelector(".message-content").textContent || "";
+  const contentNode = contentNodeFor(node);
+  if (!contentNode) return "";
+  return contentNode.dataset.rawText || contentNode.textContent || "";
 }
 
 function hasVisibleAnswerContent(node) {
@@ -102,10 +380,9 @@ function ensureWaitingContent(node) {
 }
 
 function appendMessageContent(node, text) {
-  const contentNode = node.querySelector(".message-content");
-  const current = contentNode.textContent || "";
+  const current = messageContentText(node);
   const placeholder = current === "답변중..." || current === "답변을 준비하는 중입니다...";
-  contentNode.textContent = placeholder ? text : current + text;
+  setMessageContent(node, placeholder ? text : current + text);
 }
 
 function ensureThinkingSection(node, initialText = "생각 중...") {
@@ -256,7 +533,7 @@ function summarizeToolContent(content) {
 function decorateToolMessage(node, content) {
   node.classList.add("tool");
   const summaryInfo = summarizeToolContent(content);
-  const contentNode = node.querySelector(".message-content");
+  const contentNode = contentNodeFor(node);
   const details = document.createElement("details");
   details.className = "tool-output";
 
@@ -281,14 +558,20 @@ function makeMessage(role, content, metaText = "", extraClass = "", options = {}
   node.classList.add(role);
   if (extraClass) node.classList.add(extraClass);
   node.querySelector(".message-meta").textContent = metaText || role;
-  node.querySelector(".message-content").textContent = content;
 
   if (options.thinkingText) {
     setThinkingText(node, options.thinkingText);
   }
 
   if (role === "tool") {
+    const contentNode = contentNodeFor(node);
+    if (contentNode) {
+      contentNode.dataset.rawText = String(content || "");
+      contentNode.textContent = String(content || "");
+    }
     decorateToolMessage(node, content);
+  } else {
+    setMessageContent(node, content);
   }
 
   chatLog.appendChild(node);
@@ -641,7 +924,7 @@ function renderCaseDetail(caseData, reportContent = "", graph = null) {
     reportCard.className = "detail-card";
     reportCard.innerHTML = `
       <h3>Report</h3>
-      <pre class="detail-block">${escapeHtml(reportContent)}</pre>
+      <div class="markdown-rendered detail-markdown">${renderMarkdown(reportContent)}</div>
     `;
     caseDetail.appendChild(reportCard);
   }
@@ -726,7 +1009,7 @@ function renderWikiNote(note) {
   wikiPreview.innerHTML = `
     <h3>${escapeHtml(note.title || "Untitled")}</h3>
     <p class="detail-meta">${escapeHtml(note.metadata?.created_at || "")}</p>
-    <pre class="detail-block">${escapeHtml(note.content || "")}</pre>
+    <div class="markdown-rendered note-markdown">${renderMarkdown(note.content || "")}</div>
   `;
 }
 
@@ -735,6 +1018,7 @@ function resetUiForFreshBrowserSession() {
   state.pendingAssistant = null;
   state.streamNodes.clear();
   state.activeWikiNoteId = null;
+  finishGeneration();
   chatLog.innerHTML = "";
   caseIdInput.value = "";
   artifactIdInput.value = "";
@@ -753,6 +1037,7 @@ async function bootstrap({ reset = false } = {}) {
   state.commands = data.commands || [];
   state.shellTraces = [];
   state.shellTraceMap = new Map();
+  finishGeneration();
   if (reset) {
     resetUiForFreshBrowserSession();
   }
@@ -763,6 +1048,7 @@ async function bootstrap({ reset = false } = {}) {
   sessionBadge.textContent = data.sessionId;
   sessionMeta.textContent = `브라우저 세션 ${data.sessionId}`;
   updateScopeSummary();
+  updateComposerActions();
   await connectSocket();
   await Promise.all([refreshSessions(), refreshCases(), refreshWikiNotes()]);
   setStatus(reset ? "새 WebUI 세션을 시작했습니다." : "준비되었습니다.");
@@ -789,6 +1075,7 @@ async function connectSocket() {
 
   state.socket.addEventListener("close", () => {
     setConnection(false);
+    finishGeneration();
     if (state.isResettingSession) {
       return;
     }
@@ -824,6 +1111,10 @@ async function resetBrowserSession() {
 }
 
 function handleSocketEvent(event) {
+  const stoppingThisSession =
+    state.stopRequested &&
+    (!state.stopTargetSessionKey || !event.sessionKey || event.sessionKey === state.stopTargetSessionKey);
+
   if (event.type === "ready") {
     setConnection(true);
     return;
@@ -844,7 +1135,12 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "progress" || event.type === "tool_hint") {
+    if (stoppingThisSession) {
+      return;
+    }
     if (!state.activeSessionKey || event.sessionKey === state.activeSessionKey) {
+      state.isGenerating = true;
+      updateComposerActions();
       const node = resolveAssistantNode({ claimPending: false });
       if (node) {
         setMessageMeta(node, "assistant");
@@ -865,10 +1161,15 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "stream_delta") {
+    if (stoppingThisSession) {
+      return;
+    }
     if (event.sessionKey) {
       state.activeSessionKey = event.sessionKey;
       activeSessionTitle.textContent = event.sessionKey;
     }
+    state.isGenerating = true;
+    updateComposerActions();
     let node = state.streamNodes.get(event.streamId);
     if (!node) {
       node = resolveAssistantNode({ claimPending: false });
@@ -888,6 +1189,9 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "stream_end") {
+    if (stoppingThisSession) {
+      return;
+    }
     if (event.resuming) {
       state.streamNodes.delete(event.streamId);
       setStatus("도구 실행 후 답변을 이어가는 중입니다.");
@@ -904,6 +1208,10 @@ function handleSocketEvent(event) {
       state.activeSessionKey = event.sessionKey;
       activeSessionTitle.textContent = event.sessionKey;
     }
+    const wasStopRequested = state.stopRequested;
+    if (state.isGenerating || state.isStopping) {
+      finishGeneration();
+    }
     let node = resolveAssistantNode({ replaceStreamId: event.replaceStreamId || "" });
     if (!node) {
       node = makeMessage(event.role || "assistant", "", event.role || "assistant");
@@ -913,6 +1221,8 @@ function handleSocketEvent(event) {
     finalizeAssistantNode(node);
     if (event.thinkingText) {
       setThinkingText(node, event.thinkingText);
+    } else {
+      clearPlaceholderThinking(node);
     }
     if (event.resetBrowserSession) {
       setStatus("새 WebUI 세션으로 전환하는 중입니다.");
@@ -922,7 +1232,7 @@ function handleSocketEvent(event) {
       });
       return;
     }
-    setStatus("응답이 완료되었습니다.");
+    setStatus(wasStopRequested ? "응답 생성이 중지되었습니다." : "응답이 완료되었습니다.");
     refreshSessions();
     refreshWikiNotes();
   }
@@ -1105,6 +1415,7 @@ async function loadSession(session) {
 
   state.pendingAssistant = null;
   state.streamNodes.clear();
+  finishGeneration();
   chatLog.innerHTML = "";
   for (const message of data.session.messages || []) {
     makeMessage(
@@ -1125,8 +1436,44 @@ async function loadSession(session) {
   await refreshSessions();
 }
 
+async function requestStop() {
+  if (!state.sessionId || (!state.isGenerating && !state.isStopping)) {
+    return;
+  }
+
+  state.isStopping = true;
+  state.stopRequested = true;
+  state.stopTargetSessionKey = state.activeSessionKey || null;
+  updateComposerActions();
+  freezeLiveAssistantNodes();
+  setStatus("중지 요청을 보내는 중입니다.");
+
+  const scope = stopScope();
+
+  try {
+    await apiJson("/api/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: state.sessionId,
+        caseId: scope.caseId || null,
+        artifactId: scope.artifactId || null,
+      }),
+    });
+    setStatus("중지 요청을 전송했습니다.");
+  } catch (error) {
+    state.isStopping = false;
+    state.stopRequested = false;
+    state.stopTargetSessionKey = null;
+    updateComposerActions();
+    setStatus(`중지 실패: ${error.message}`);
+  }
+}
+
 async function sendMessage(event) {
   event.preventDefault();
+  if (state.isGenerating || state.isStopping) return;
+
   const rawText = messageInput.value;
   const text = rawText.trim();
   if (!text) return;
@@ -1138,8 +1485,8 @@ async function sendMessage(event) {
     state.pendingAssistant = null;
   }
   createPendingAssistantNode();
+  beginGeneration();
   setStatus("생각하는 중입니다.");
-  sendButton.disabled = true;
 
   try {
     const data = await apiJson("/api/chat", {
@@ -1171,9 +1518,8 @@ async function sendMessage(event) {
       finalizeAssistantNode(state.pendingAssistant);
       state.pendingAssistant = null;
     }
+    finishGeneration();
     setStatus(`전송 실패: ${error.message}`);
-  } finally {
-    sendButton.disabled = false;
   }
 }
 
@@ -1277,12 +1623,35 @@ messageInput.addEventListener("keydown", (event) => {
 composer.addEventListener("submit", (event) => {
   sendMessage(event).catch((error) => {
     console.error(error);
+    finishGeneration();
     setStatus(`전송 중 오류: ${error.message}`);
-    sendButton.disabled = false;
   });
 });
 
+sendButton.addEventListener("click", () => {
+  if (!state.sessionId || state.isStopping) {
+    return;
+  }
+
+  if (state.isGenerating) {
+    requestStop().catch((error) => {
+      console.error(error);
+      state.isStopping = false;
+      state.stopRequested = false;
+      state.stopTargetSessionKey = null;
+      updateComposerActions();
+      setStatus(`중지 중 오류: ${error.message}`);
+    });
+    return;
+  }
+
+  composer.requestSubmit();
+});
+
+updateComposerActions();
+
 bootstrap().catch((error) => {
   console.error(error);
+  finishGeneration();
   setStatus(`초기화 실패: ${error.message}`);
 });
