@@ -32,6 +32,7 @@ class DiscordConfig(Base):
     gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
     intents: int = 37377
     group_policy: Literal["mention", "open"] = "mention"
+    max_connect_attempts: int = Field(default=5, ge=1, le=100)
 
 
 class DiscordChannel(BaseChannel):
@@ -55,6 +56,7 @@ class DiscordChannel(BaseChannel):
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._http: httpx.AsyncClient | None = None
         self._bot_user_id: str | None = None
+        self._gateway_ready = False
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
@@ -64,8 +66,10 @@ class DiscordChannel(BaseChannel):
 
         self._running = True
         self._http = httpx.AsyncClient(timeout=30.0)
+        failed_attempts = 0
 
         while self._running:
+            self._gateway_ready = False
             try:
                 logger.info("Connecting to Discord gateway...")
                 async with websockets.connect(self.config.gateway_url) as ws:
@@ -75,9 +79,30 @@ class DiscordChannel(BaseChannel):
                 break
             except Exception as e:
                 logger.warning("Discord gateway error: {}", e)
-                if self._running:
-                    logger.info("Reconnecting to Discord gateway in 5 seconds...")
-                    await asyncio.sleep(5)
+            finally:
+                was_ready = self._gateway_ready
+                self._gateway_ready = False
+                self._ws = None
+                if self._heartbeat_task:
+                    self._heartbeat_task.cancel()
+                    self._heartbeat_task = None
+
+            if was_ready:
+                failed_attempts = 0
+            else:
+                failed_attempts += 1
+
+            if failed_attempts >= self.config.max_connect_attempts:
+                logger.error(
+                    "Discord gateway failed {} consecutive times; stopping reconnect attempts",
+                    self.config.max_connect_attempts,
+                )
+                await self.stop()
+                break
+
+            if self._running:
+                logger.info("Reconnecting to Discord gateway in 5 seconds...")
+                await asyncio.sleep(5)
 
     async def stop(self) -> None:
         """Stop the Discord channel."""
@@ -234,6 +259,7 @@ class DiscordChannel(BaseChannel):
                 await self._start_heartbeat(interval_ms / 1000)
                 await self._identify()
             elif op == 0 and event_type == "READY":
+                self._gateway_ready = True
                 logger.info("Discord gateway READY")
                 # Capture bot user ID for mention detection
                 user_data = payload.get("user") or {}
