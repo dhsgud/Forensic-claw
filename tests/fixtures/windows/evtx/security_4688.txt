@@ -1,0 +1,25 @@
+Event[1]
+  Log Name: Security
+  Source: Microsoft-Windows-Security-Auditing
+  Date: 2026-04-10T01:15:00.0000000Z
+  Event ID: 4688
+  Task: Process Creation
+  Level: Information
+  Opcode: Info
+  Keyword: Audit Success
+  User: S-1-5-18
+  Computer: WORKSTATION
+  Description: A new process has been created. New Process Name: C:\Windows\System32\calc.exe
+
+Event[2]
+  Log Name: Security
+  Source: Microsoft-Windows-Security-Auditing
+  Date: 2026-04-10T01:16:30.0000000Z
+  Event ID: 4688
+  Task: Process Creation
+  Level: Information
+  Opcode: Info
+  Keyword: Audit Success
+  User: S-1-5-18
+  Computer: WORKSTATION
+  Description: A new process has been created. New Process Name: C:\Windows\System32\notepad.exe

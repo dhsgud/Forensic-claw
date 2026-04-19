@@ -1,0 +1,12 @@
+{
+  "executableName": "CALC.EXE",
+  "runCount": 5,
+  "lastRunTimes": [
+    "2026-04-10T10:15:00+09:00",
+    "2026-04-09T20:30:00+09:00"
+  ],
+  "referencedFiles": [
+    "C:\\Windows\\System32\\calc.exe",
+    "C:\\Windows\\Prefetch\\CALC.EXE-TEST.pf"
+  ]
+}

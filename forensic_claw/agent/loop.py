@@ -29,6 +29,12 @@ from forensic_claw.agent.tools.registry import ToolRegistry
 from forensic_claw.agent.tools.shell import ExecTool
 from forensic_claw.agent.tools.spawn import SpawnTool
 from forensic_claw.agent.tools.web import WebFetchTool, WebSearchTool
+from forensic_claw.agent.tools.windows import (
+    WindowsAmcacheAnalyzeTool,
+    WindowsEventLogQueryTool,
+    WindowsPrefetchAnalyzeTool,
+    WindowsTimelineBuildTool,
+)
 from forensic_claw.bus.events import InboundMessage, OutboundMessage
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.command import CommandContext, CommandRouter, register_builtin_commands
@@ -205,6 +211,10 @@ class AgentLoop:
             send_callback=self.bus.publish_outbound,
             content_transform=self._normalize_user_facing_text,
         ))
+        self.tools.register(WindowsEventLogQueryTool(workspace=self.workspace))
+        self.tools.register(WindowsPrefetchAnalyzeTool(workspace=self.workspace))
+        self.tools.register(WindowsAmcacheAnalyzeTool(workspace=self.workspace))
+        self.tools.register(WindowsTimelineBuildTool(workspace=self.workspace))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(

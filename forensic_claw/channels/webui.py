@@ -8,6 +8,7 @@ import json
 import uuid
 import webbrowser
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from forensic_claw.bus.queue import MessageBus
 from forensic_claw.channels.base import BaseChannel
 from forensic_claw.command import get_builtin_command_specs
 from forensic_claw.config.schema import Base
+from forensic_claw.forensics import CaseStore, ReportGraph
 from forensic_claw.session.manager import Session, SessionManager
 from forensic_claw.session.scopes import build_scoped_session_key, parse_scoped_session_key
 from forensic_claw.utils.helpers import (
@@ -88,6 +90,7 @@ class WebUIChannel(BaseChannel):
         app.router.add_get("/api/cases/{case_id}", self._handle_case_detail)
         app.router.add_get("/api/cases/{case_id}/report", self._handle_case_report)
         app.router.add_get("/api/cases/{case_id}/graph", self._handle_case_graph)
+        app.router.add_get("/api/cases/{case_id}/timeline", self._handle_case_timeline)
         app.router.add_get("/api/cases/{case_id}/evidence/{evidence_id}", self._handle_evidence_detail)
         app.router.add_get("/api/cases/{case_id}/sources/{source_id}", self._handle_source_detail)
         app.router.add_get("/api/wiki", self._handle_wiki_list)
@@ -223,6 +226,228 @@ class WebUIChannel(BaseChannel):
     def _cases_root(self) -> Path | None:
         workspace = self._workspace_root
         return workspace / "forensics" / "cases" if workspace else None
+
+    def _get_case_store(self) -> CaseStore | None:
+        workspace = self._workspace_root
+        return CaseStore(workspace) if workspace else None
+
+    @staticmethod
+    def _dedupe_text_values(values: list[str] | None) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for value in values or []:
+            text = str(value).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            unique.append(text)
+        return unique
+
+    @staticmethod
+    def _timeline_date_key(timestamp: str) -> str:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date().isoformat()
+
+    @staticmethod
+    def _note_sort_value(note: dict[str, Any]) -> str:
+        return str(note.get("updatedAt") or note.get("createdAt") or "")
+
+    @staticmethod
+    def _graph_link_index(graph: ReportGraph) -> dict[str, dict[str, list[str]]]:
+        evidence_to_sources: dict[str, list[str]] = {}
+        for row in graph.evidence_links:
+            row_id = row.get("id")
+            if not isinstance(row_id, str):
+                continue
+            evidence_to_sources[row_id] = WebUIChannel._dedupe_text_values(row.get("sourceIds"))
+
+        source_to_timelines: dict[str, list[str]] = {}
+        for row in graph.source_links:
+            row_id = row.get("id")
+            if not isinstance(row_id, str):
+                continue
+            source_to_timelines[row_id] = WebUIChannel._dedupe_text_values(row.get("timelineIds"))
+
+        timeline_to_evidence: dict[str, list[str]] = {}
+        for row in graph.timeline_links:
+            row_id = row.get("id")
+            if not isinstance(row_id, str):
+                continue
+            timeline_to_evidence[row_id] = WebUIChannel._dedupe_text_values(row.get("evidenceIds"))
+
+        return {
+            "evidenceToSources": evidence_to_sources,
+            "sourceToTimelines": source_to_timelines,
+            "timelineToEvidence": timeline_to_evidence,
+        }
+
+    @classmethod
+    def _dedupe_note_summaries(cls, notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: dict[str, dict[str, Any]] = {}
+        for note in notes:
+            note_id = note.get("id")
+            if isinstance(note_id, str) and note_id:
+                deduped[note_id] = note
+        return sorted(deduped.values(), key=cls._note_sort_value, reverse=True)
+
+    def _case_note_paths(self, case_id: str, artifact_id: str | None = None) -> list[Path]:
+        root = self._wiki_root
+        if root is None:
+            return []
+
+        case_root = self._resolve_child(root / "cases", case_id)
+        if case_root is None or not case_root.is_dir():
+            return []
+
+        if not artifact_id:
+            return sorted(path for path in case_root.rglob("*.md") if path.is_file())
+
+        candidates: list[Path] = []
+        for folder_name in ("artifacts", "sources", "timelines"):
+            folder = case_root / folder_name
+            direct_file = self._resolve_child(folder, f"{artifact_id}.md")
+            if direct_file is not None and direct_file.is_file():
+                candidates.append(direct_file)
+
+            legacy_dir = self._resolve_child(folder, artifact_id)
+            if legacy_dir is not None and legacy_dir.is_dir():
+                candidates.extend(
+                    sorted(path for path in legacy_dir.rglob("*.md") if path.is_file())
+                )
+
+        deduped: dict[Path, Path] = {}
+        for path in candidates:
+            deduped[path.resolve(strict=False)] = path
+        return list(deduped.values())
+
+    def _timeline_note_paths(self, case_id: str, timeline_dates: list[str]) -> list[Path]:
+        root = self._wiki_root
+        if root is None:
+            return []
+
+        paths: list[Path] = []
+        case_root = self._resolve_child(root / "cases", case_id)
+        if case_root is None or not case_root.is_dir():
+            return paths
+
+        for date_key in timeline_dates:
+            candidate = self._resolve_child(case_root / "timelines", f"{date_key}.md")
+            if candidate is not None and candidate.is_file():
+                paths.append(candidate)
+        return paths
+
+    def _build_report_sections(
+        self,
+        store: CaseStore,
+        case_id: str,
+        *,
+        graph: ReportGraph | None = None,
+        timeline_entries: list[Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        graph = graph or store.read_graph(case_id)
+        timeline_entries = timeline_entries if timeline_entries is not None else store.read_timeline(case_id)
+        timeline_index = {entry.id: entry for entry in timeline_entries if entry.id}
+        link_index = self._graph_link_index(graph)
+        evidence_to_sources = link_index["evidenceToSources"]
+        source_to_timelines = link_index["sourceToTimelines"]
+        timeline_to_evidence = link_index["timelineToEvidence"]
+
+        raw_sections = list(graph.report_sections)
+        if not raw_sections:
+            evidence_ids = store.list_evidence_ids(case_id)
+            if evidence_ids:
+                raw_sections = [
+                    {"id": "collected-findings", "title": "Collected Findings", "evidenceIds": evidence_ids}
+                ]
+
+        sections: list[dict[str, Any]] = []
+        for row in raw_sections:
+            evidence_ids = self._dedupe_text_values(row.get("evidenceIds"))
+            source_ids: list[str] = []
+            timeline_ids: list[str] = []
+
+            for evidence_id in evidence_ids:
+                derived_source_ids = evidence_to_sources.get(evidence_id, [])
+                if not derived_source_ids:
+                    try:
+                        derived_source_ids = store.load_evidence(case_id, evidence_id).derived_from_source_ids
+                    except FileNotFoundError:
+                        derived_source_ids = []
+                source_ids.extend(derived_source_ids)
+
+                for timeline_id, linked_evidence_ids in timeline_to_evidence.items():
+                    if evidence_id in linked_evidence_ids:
+                        timeline_ids.append(timeline_id)
+
+            source_ids = self._dedupe_text_values(source_ids)
+            for source_id in source_ids:
+                timeline_ids.extend(source_to_timelines.get(source_id, []))
+            timeline_ids = self._dedupe_text_values(timeline_ids)
+
+            wiki_notes: list[dict[str, Any]] = []
+            for evidence_id in evidence_ids:
+                wiki_notes.extend(self._list_note_summaries(paths=self._case_note_paths(case_id, evidence_id)))
+            for source_id in source_ids:
+                wiki_notes.extend(self._list_note_summaries(paths=self._case_note_paths(case_id, source_id)))
+            timeline_dates = [
+                self._timeline_date_key(timeline_index[timeline_id].timestamp)
+                for timeline_id in timeline_ids
+                if timeline_id in timeline_index
+            ]
+            wiki_notes.extend(
+                self._list_note_summaries(paths=self._timeline_note_paths(case_id, timeline_dates))
+            )
+
+            sections.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "title": str(row.get("title") or row.get("id") or "Untitled Section"),
+                    "evidenceIds": evidence_ids,
+                    "sourceIds": source_ids,
+                    "timelineIds": timeline_ids,
+                    "wikiNotes": self._dedupe_note_summaries(wiki_notes),
+                }
+            )
+
+        return sections
+
+    def _case_summary_from_store(self, store: CaseStore, case_id: str) -> dict[str, Any]:
+        manifest = store.load_manifest(case_id)
+        evidence_ids = store.list_evidence_ids(case_id)
+        source_ids = store.list_source_ids(case_id)
+        timeline_entries = store.read_timeline(case_id)
+        graph = store.read_graph(case_id)
+        report_sections = self._build_report_sections(
+            store,
+            case_id,
+            graph=graph,
+            timeline_entries=timeline_entries,
+        )
+        timeline_ids = [entry.id for entry in timeline_entries if entry.id]
+        timeline_dates = self._dedupe_text_values(
+            [self._timeline_date_key(entry.timestamp) for entry in timeline_entries]
+        )
+        case_dir = store.case_dir(case_id)
+        return {
+            "id": manifest.id,
+            "title": manifest.title,
+            "status": manifest.status,
+            "summary": manifest.summary,
+            "tags": list(manifest.tags),
+            "createdAt": manifest.created_at,
+            "updatedAt": manifest.updated_at,
+            "hasReport": (case_dir / "report.md").is_file(),
+            "hasGraph": (case_dir / "graph.json").is_file(),
+            "evidenceCount": len(evidence_ids),
+            "sourceCount": len(source_ids),
+            "timelineCount": len(timeline_ids),
+            "reportSectionCount": len(report_sections),
+            "manifest": manifest.to_dict(),
+            "evidenceIds": evidence_ids,
+            "sourceIds": source_ids,
+            "timelineIds": timeline_ids,
+            "timelineDates": timeline_dates,
+            "reportSections": report_sections,
+        }
 
     def _event_base(self, chat_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
         case_id = metadata.get("case_id") or metadata.get("caseId")
@@ -486,11 +711,22 @@ class WebUIChannel(BaseChannel):
             "id": self._encode_note_id(relative_path),
             "relativePath": relative_path,
             "title": metadata.get("title") or path.stem,
-            "createdAt": metadata.get("created_at"),
+            "createdAt": metadata.get("created_at") or metadata.get("updated_at"),
+            "updatedAt": metadata.get("updated_at") or metadata.get("created_at"),
             "caseId": metadata.get("case_id"),
             "artifactId": metadata.get("artifact_id"),
+            "sourceId": metadata.get("source_id"),
+            "timelineDate": metadata.get("timeline_date"),
+            "noteType": metadata.get("note_type"),
             "summary": self._markdown_summary(body),
         }
+
+    def _list_note_summaries(self, *, paths: list[Path]) -> list[dict[str, Any]]:
+        root = self._wiki_root
+        if root is None:
+            return []
+        notes = [self._wiki_note_summary(path, wiki_root=root) for path in paths if path.is_file()]
+        return self._dedupe_note_summaries(notes)
 
     def _list_wiki_notes(
         self,
@@ -500,16 +736,20 @@ class WebUIChannel(BaseChannel):
         artifact_id: str | None = None,
     ) -> list[dict[str, Any]]:
         root = self._wiki_root
+        if root is None:
+            return []
+
+        if case_id:
+            return self._list_note_summaries(paths=self._case_note_paths(case_id, artifact_id))
+
         wiki_dir = self._wiki_dir_for_scope(
             browser_session_id=browser_session_id,
             case_id=case_id,
             artifact_id=artifact_id,
         )
-        if root is None or wiki_dir is None or not wiki_dir.is_dir():
+        if wiki_dir is None or not wiki_dir.is_dir():
             return []
-
-        notes = [self._wiki_note_summary(path, wiki_root=root) for path in wiki_dir.glob("*.md")]
-        return sorted(notes, key=lambda row: row.get("createdAt", ""), reverse=True)
+        return self._list_note_summaries(paths=list(wiki_dir.glob("*.md")))
 
     def _wiki_note_path(self, note_id: str) -> Path | None:
         root = self._wiki_root
@@ -625,9 +865,9 @@ class WebUIChannel(BaseChannel):
             session_id = self._new_browser_session_id()
         else:
             session_id = previous_session_id or self._new_browser_session_id()
-        cases_root = self._cases_root
+        case_store = self._get_case_store()
         wiki_root = self._wiki_root
-        has_cases = bool(cases_root and cases_root.is_dir() and any(cases_root.iterdir()))
+        has_cases = bool(case_store and case_store.list_case_ids())
         has_wiki = bool(wiki_root and wiki_root.is_dir() and any(wiki_root.iterdir()))
         return self._json_response(
             {
@@ -821,102 +1061,225 @@ class WebUIChannel(BaseChannel):
         )
 
     async def _handle_cases_list(self, request: web.Request) -> web.Response:
-        cases_root = self._cases_root
-        if cases_root is None:
+        store = self._get_case_store()
+        if store is None:
             return self._json_response({"error": "session_manager_unavailable"}, status=503)
-        if not cases_root.is_dir():
-            return self._json_response({"cases": []})
-
-        cases = [
-            self._case_summary(case_dir)
-            for case_dir in sorted(cases_root.iterdir(), key=lambda item: item.name)
-            if case_dir.is_dir()
-        ]
-        return self._json_response({"cases": cases})
-
-    async def _handle_case_detail(self, request: web.Request) -> web.Response:
-        case_id = request.match_info["case_id"]
-        case_dir = self._case_dir(case_id)
-        if case_dir is None:
-            return self._json_response({"error": "case_not_found"}, status=404)
-
-        manifest = self._case_manifest(case_dir)
-        evidence_ids = self._directory_names(case_dir / "evidence")
-        source_ids = self._directory_names(case_dir / "sources")
         return self._json_response(
-            {
-                "case": {
-                    **self._case_summary(case_dir),
-                    "manifest": manifest,
-                    "evidenceIds": evidence_ids,
-                    "sourceIds": source_ids,
-                }
-            }
+            {"cases": [self._case_summary_from_store(store, case_id) for case_id in store.list_case_ids()]}
         )
 
+    async def _handle_case_detail(self, request: web.Request) -> web.Response:
+        store = self._get_case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
+
+        case_id = request.match_info["case_id"]
+        try:
+            case = self._case_summary_from_store(store, case_id)
+        except FileNotFoundError:
+            return self._json_response({"error": "case_not_found"}, status=404)
+        return self._json_response({"case": case})
+
     async def _handle_case_report(self, request: web.Request) -> web.Response:
-        case_dir = self._case_dir(request.match_info["case_id"])
-        if case_dir is None:
+        store = self._get_case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
+
+        case_id = request.match_info["case_id"]
+        try:
+            case_dir = store.case_dir(case_id)
+        except FileNotFoundError:
             return self._json_response({"error": "case_not_found"}, status=404)
 
         report_path = case_dir / "report.md"
         if not report_path.is_file():
             return self._json_response({"error": "report_not_found"}, status=404)
+        graph = store.read_graph(case_id)
+        timeline_entries = store.read_timeline(case_id)
         return self._json_response(
             {
-                "caseId": case_dir.name,
-                "content": report_path.read_text(encoding="utf-8"),
+                "caseId": case_id,
+                "content": store.read_report(case_id),
+                "draft": store.read_report_draft(case_id),
+                "sections": self._build_report_sections(
+                    store,
+                    case_id,
+                    graph=graph,
+                    timeline_entries=timeline_entries,
+                ),
             }
         )
 
     async def _handle_case_graph(self, request: web.Request) -> web.Response:
-        case_dir = self._case_dir(request.match_info["case_id"])
-        if case_dir is None:
+        store = self._get_case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
+
+        case_id = request.match_info["case_id"]
+        try:
+            case_dir = store.case_dir(case_id)
+        except FileNotFoundError:
             return self._json_response({"error": "case_not_found"}, status=404)
 
         graph_path = case_dir / "graph.json"
-        graph = self._load_json_file(graph_path)
-        if graph is None:
+        if not graph_path.is_file():
             return self._json_response({"error": "graph_not_found"}, status=404)
-        return self._json_response({"caseId": case_dir.name, "graph": graph})
-
-    async def _handle_evidence_detail(self, request: web.Request) -> web.Response:
-        case_dir = self._case_dir(request.match_info["case_id"])
-        if case_dir is None:
-            return self._json_response({"error": "case_not_found"}, status=404)
-
-        evidence_root = case_dir / "evidence"
-        evidence_dir = self._resolve_child(evidence_root, request.match_info["evidence_id"])
-        if evidence_dir is None or not evidence_dir.is_dir():
-            return self._json_response({"error": "evidence_not_found"}, status=404)
-
-        metadata = self._load_json_file(evidence_dir / "metadata.json")
+        graph = store.read_graph(case_id)
+        timeline_entries = store.read_timeline(case_id)
         return self._json_response(
             {
-                "caseId": case_dir.name,
-                "evidenceId": evidence_dir.name,
-                "metadata": metadata if isinstance(metadata, dict) else {},
-                "files": self._file_listing(evidence_dir / "files"),
+                "caseId": case_id,
+                "graph": graph.to_dict(),
+                "reportSections": self._build_report_sections(
+                    store,
+                    case_id,
+                    graph=graph,
+                    timeline_entries=timeline_entries,
+                ),
+                "linkIndex": self._graph_link_index(graph),
+            }
+        )
+
+    async def _handle_case_timeline(self, request: web.Request) -> web.Response:
+        store = self._get_case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
+
+        case_id = request.match_info["case_id"]
+        try:
+            store.case_dir(case_id)
+        except FileNotFoundError:
+            return self._json_response({"error": "case_not_found"}, status=404)
+
+        timeline_entries = store.read_timeline(case_id)
+        report_sections = self._build_report_sections(store, case_id, timeline_entries=timeline_entries)
+        section_ids_by_timeline: dict[str, list[str]] = defaultdict(list)
+        for section in report_sections:
+            for timeline_id in section.get("timelineIds", []):
+                section_ids_by_timeline[timeline_id].append(section["id"])
+
+        timeline_entries_payload: list[dict[str, Any]] = []
+        entries_by_date: dict[str, list[str]] = defaultdict(list)
+        for entry in timeline_entries:
+            date_key = self._timeline_date_key(entry.timestamp)
+            entries_by_date[date_key].append(entry.id or "")
+            note_summaries = self._list_note_summaries(
+                paths=self._timeline_note_paths(case_id, [date_key])
+            )
+            timeline_entries_payload.append(
+                {
+                    **entry.to_dict(),
+                    "date": date_key,
+                    "sectionIds": section_ids_by_timeline.get(entry.id or "", []),
+                    "wikiNoteId": note_summaries[0]["id"] if note_summaries else None,
+                    "wikiNoteTitle": note_summaries[0]["title"] if note_summaries else None,
+                }
+            )
+
+        timeline_dates_payload: list[dict[str, Any]] = []
+        for date_key in sorted(entries_by_date):
+            note_summaries = self._list_note_summaries(
+                paths=self._timeline_note_paths(case_id, [date_key])
+            )
+            timeline_dates_payload.append(
+                {
+                    "date": date_key,
+                    "entryIds": self._dedupe_text_values(entries_by_date[date_key]),
+                    "noteId": note_summaries[0]["id"] if note_summaries else None,
+                    "noteTitle": note_summaries[0]["title"] if note_summaries else None,
+                }
+            )
+
+        return self._json_response(
+            {
+                "caseId": case_id,
+                "entries": timeline_entries_payload,
+                "dates": timeline_dates_payload,
+            }
+        )
+
+    async def _handle_evidence_detail(self, request: web.Request) -> web.Response:
+        store = self._get_case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
+
+        case_id = request.match_info["case_id"]
+        evidence_id = request.match_info["evidence_id"]
+        try:
+            metadata = store.load_evidence(case_id, evidence_id)
+        except FileNotFoundError:
+            try:
+                store.case_dir(case_id)
+            except FileNotFoundError:
+                return self._json_response({"error": "case_not_found"}, status=404)
+            return self._json_response({"error": "evidence_not_found"}, status=404)
+
+        graph = store.read_graph(case_id)
+        link_index = self._graph_link_index(graph)
+        linked_timeline_ids = sorted(
+            timeline_id
+            for timeline_id, linked_evidence_ids in link_index["timelineToEvidence"].items()
+            if evidence_id in linked_evidence_ids
+        )
+        report_sections = [
+            {"id": section["id"], "title": section["title"]}
+            for section in self._build_report_sections(store, case_id, graph=graph)
+            if evidence_id in section.get("evidenceIds", [])
+        ]
+        return self._json_response(
+            {
+                "caseId": case_id,
+                "evidenceId": evidence_id,
+                "metadata": metadata.to_dict(),
+                "files": store.list_evidence_files(case_id, evidence_id),
+                "linkedSourceIds": link_index["evidenceToSources"].get(
+                    evidence_id,
+                    list(metadata.derived_from_source_ids),
+                ),
+                "linkedTimelineIds": linked_timeline_ids,
+                "reportSections": report_sections,
+                "wikiNotes": self._list_note_summaries(paths=self._case_note_paths(case_id, evidence_id)),
             }
         )
 
     async def _handle_source_detail(self, request: web.Request) -> web.Response:
-        case_dir = self._case_dir(request.match_info["case_id"])
-        if case_dir is None:
-            return self._json_response({"error": "case_not_found"}, status=404)
+        store = self._get_case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
 
-        sources_root = case_dir / "sources"
-        source_dir = self._resolve_child(sources_root, request.match_info["source_id"])
-        if source_dir is None or not source_dir.is_dir():
+        case_id = request.match_info["case_id"]
+        source_id = request.match_info["source_id"]
+        try:
+            metadata = store.load_source(case_id, source_id)
+        except FileNotFoundError:
+            try:
+                store.case_dir(case_id)
+            except FileNotFoundError:
+                return self._json_response({"error": "case_not_found"}, status=404)
             return self._json_response({"error": "source_not_found"}, status=404)
 
-        metadata = self._load_json_file(source_dir / "metadata.json")
+        graph = store.read_graph(case_id)
+        link_index = self._graph_link_index(graph)
+        linked_evidence_ids = sorted(
+            evidence_id
+            for evidence_id, linked_source_ids in link_index["evidenceToSources"].items()
+            if source_id in linked_source_ids
+        )
+        report_sections = [
+            {"id": section["id"], "title": section["title"]}
+            for section in self._build_report_sections(store, case_id, graph=graph)
+            if source_id in section.get("sourceIds", [])
+        ]
         return self._json_response(
             {
-                "caseId": case_dir.name,
-                "sourceId": source_dir.name,
-                "metadata": metadata if isinstance(metadata, dict) else {},
-                "files": self._file_listing(source_dir / "raw"),
+                "caseId": case_id,
+                "sourceId": source_id,
+                "metadata": metadata.to_dict(),
+                "files": store.list_source_files(case_id, source_id),
+                "linkedEvidenceIds": linked_evidence_ids,
+                "linkedTimelineIds": link_index["sourceToTimelines"].get(source_id, []),
+                "reportSections": report_sections,
+                "wikiNotes": self._list_note_summaries(paths=self._case_note_paths(case_id, source_id)),
             }
         )
 

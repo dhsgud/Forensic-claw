@@ -9,6 +9,11 @@ const state = {
   cases: [],
   commands: [],
   activeCase: null,
+  activeCaseReport: null,
+  activeCaseGraph: null,
+  activeCaseTimeline: null,
+  activeReportSectionId: null,
+  activeTimelineId: null,
   activeWikiNoteId: null,
   shellTraces: [],
   shellTraceMap: new Map(),
@@ -834,6 +839,42 @@ async function apiJsonOptional(url) {
   }
 }
 
+function primaryArtifactIdForSection(section) {
+  return (section?.evidenceIds || [])[0] || (section?.sourceIds || [])[0] || "";
+}
+
+function normalizeTimelineData(timelineData) {
+  return timelineData || { entries: [], dates: [] };
+}
+
+async function selectTimelineEntry(entryId, { loadNote = true } = {}) {
+  if (!entryId) return;
+  state.activeTimelineId = entryId;
+  renderCaseDetail(state.activeCase, state.activeCaseReport, state.activeCaseGraph, state.activeCaseTimeline);
+
+  const entry = (state.activeCaseTimeline?.entries || []).find((item) => item.id === entryId);
+  if (loadNote && entry?.wikiNoteId) {
+    await loadWikiNote(entry.wikiNoteId);
+  }
+}
+
+async function selectReportSection(section) {
+  if (!section) return;
+  state.activeReportSectionId = section.id || null;
+  if ((section.timelineIds || []).length) {
+    state.activeTimelineId = section.timelineIds[0];
+  }
+  renderCaseDetail(state.activeCase, state.activeCaseReport, state.activeCaseGraph, state.activeCaseTimeline);
+
+  const artifactId = primaryArtifactIdForSection(section);
+  if (artifactId) {
+    await selectArtifact(artifactId);
+  }
+  if ((section.wikiNotes || []).length) {
+    await loadWikiNote(section.wikiNotes[0].id);
+  }
+}
+
 function renderCases() {
   casesList.innerHTML = "";
   if (!state.cases.length) {
@@ -852,20 +893,38 @@ function renderCases() {
       <strong>${escapeHtml(item.title || item.id)}</strong>
       <small>${escapeHtml(item.id)}</small>
       <small>${escapeHtml(item.summary || "요약 없음")}</small>
-      <small>${escapeHtml(`evidence ${item.evidenceCount || 0} · source ${item.sourceCount || 0}`)}</small>
+      <small>${escapeHtml(`evidence ${item.evidenceCount || 0} · source ${item.sourceCount || 0} · timeline ${item.timelineCount || 0}`)}</small>
     `;
     button.addEventListener("click", () => selectCase(item.id));
     casesList.appendChild(button);
   }
 }
 
-function renderCaseDetail(caseData, reportContent = "", graph = null) {
+function renderCaseDetail(caseData, reportData = null, graphData = null, timelineData = null) {
   state.activeCase = caseData;
+  state.activeCaseReport = reportData;
+  state.activeCaseGraph = graphData;
+  state.activeCaseTimeline = normalizeTimelineData(timelineData);
   refreshSuggestionLists();
   renderCases();
 
+  const sections = reportData?.sections || caseData.reportSections || graphData?.reportSections || [];
+  const timeline = normalizeTimelineData(timelineData);
+  const sectionIds = sections.map((section) => section.id).filter(Boolean);
+  if (state.activeReportSectionId && !sectionIds.includes(state.activeReportSectionId)) {
+    state.activeReportSectionId = null;
+  }
+  const timelineEntryIds = (timeline.entries || []).map((entry) => entry.id).filter(Boolean);
+  if (state.activeTimelineId && !timelineEntryIds.includes(state.activeTimelineId)) {
+    state.activeTimelineId = null;
+  }
+  if (!state.activeTimelineId && timelineEntryIds.length) {
+    state.activeTimelineId = timelineEntryIds[0];
+  }
+
   caseSummary.textContent =
-    caseData.summary || `${caseData.id} case를 읽었습니다. evidence ${caseData.evidenceIds.length}개, source ${caseData.sourceIds.length}개`;
+    caseData.summary ||
+    `${caseData.id} case를 읽었습니다. evidence ${caseData.evidenceIds.length}개, source ${caseData.sourceIds.length}개, timeline ${timeline.entries.length}개`;
   caseDetail.innerHTML = "";
 
   const headerCard = document.createElement("section");
@@ -873,6 +932,12 @@ function renderCaseDetail(caseData, reportContent = "", graph = null) {
   headerCard.innerHTML = `
     <h3>${escapeHtml(caseData.title || caseData.id)}</h3>
     <p class="detail-meta">${escapeHtml(caseData.id)} · ${escapeHtml(caseData.status || "draft")}</p>
+    <div class="token-row detail-summary-row">
+      <span class="file-chip">evidence ${escapeHtml(caseData.evidenceCount || caseData.evidenceIds.length || 0)}</span>
+      <span class="file-chip">source ${escapeHtml(caseData.sourceCount || caseData.sourceIds.length || 0)}</span>
+      <span class="file-chip">timeline ${escapeHtml(caseData.timelineCount || timeline.entries.length || 0)}</span>
+      <span class="file-chip">sections ${escapeHtml(caseData.reportSectionCount || sections.length || 0)}</span>
+    </div>
     <pre class="detail-block">${escapeHtml(JSON.stringify(caseData.manifest || {}, null, 2))}</pre>
   `;
   caseDetail.appendChild(headerCard);
@@ -919,22 +984,165 @@ function renderCaseDetail(caseData, reportContent = "", graph = null) {
   }
   caseDetail.appendChild(sourceCard);
 
-  if (reportContent) {
+  const sectionCard = document.createElement("section");
+  sectionCard.className = "detail-card";
+  sectionCard.innerHTML = '<h3>Report Sections</h3><div class="detail-stack"></div>';
+  const sectionStack = sectionCard.querySelector(".detail-stack");
+  if (sections.length) {
+    for (const section of sections) {
+      const block = document.createElement("div");
+      block.className = "trace-section";
+      if (state.activeReportSectionId === section.id) {
+        block.classList.add("active");
+      }
+
+      const header = document.createElement("button");
+      header.type = "button";
+      header.className = "trace-link-card";
+      header.innerHTML = `
+        <strong>${escapeHtml(section.title || section.id || "Untitled Section")}</strong>
+        <small>${escapeHtml(`evidence ${section.evidenceIds?.length || 0} · source ${section.sourceIds?.length || 0} · timeline ${section.timelineIds?.length || 0}`)}</small>
+      `;
+      header.addEventListener("click", () => {
+        selectReportSection(section).catch((error) => setStatus(`section trace 실패: ${error.message}`));
+      });
+      block.appendChild(header);
+
+      const linkRow = document.createElement("div");
+      linkRow.className = "token-row";
+      for (const evidenceId of section.evidenceIds || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "token-button";
+        button.textContent = evidenceId;
+        button.addEventListener("click", () => selectArtifact(evidenceId));
+        linkRow.appendChild(button);
+      }
+      for (const sourceId of section.sourceIds || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "token-button";
+        button.textContent = sourceId;
+        button.addEventListener("click", () => selectArtifact(sourceId));
+        linkRow.appendChild(button);
+      }
+      for (const timelineId of section.timelineIds || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "token-button";
+        if (timelineId === state.activeTimelineId) {
+          button.classList.add("active");
+        }
+        button.textContent = timelineId;
+        button.addEventListener("click", () => {
+          selectTimelineEntry(timelineId).catch((error) => setStatus(`timeline trace 실패: ${error.message}`));
+        });
+        linkRow.appendChild(button);
+      }
+      for (const note of section.wikiNotes || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "token-button token-button-secondary";
+        button.textContent = note.title || note.relativePath || "Wiki";
+        button.addEventListener("click", () => {
+          loadWikiNote(note.id).catch((error) => setStatus(`wiki note 로드 실패: ${error.message}`));
+        });
+        linkRow.appendChild(button);
+      }
+      block.appendChild(linkRow);
+      sectionStack.appendChild(block);
+    }
+  } else {
+    sectionStack.innerHTML = '<span class="subtle">아직 연결된 report section이 없습니다.</span>';
+  }
+  caseDetail.appendChild(sectionCard);
+
+  const timelineCard = document.createElement("section");
+  timelineCard.className = "detail-card";
+  timelineCard.innerHTML = '<h3>Timeline</h3><div class="detail-stack"></div>';
+  const timelineStack = timelineCard.querySelector(".detail-stack");
+  if ((timeline.entries || []).length) {
+    for (const entry of timeline.entries) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "trace-link-card";
+      if (entry.id === state.activeTimelineId) {
+        button.classList.add("active");
+      }
+      button.innerHTML = `
+        <strong>${escapeHtml(entry.timestamp || entry.id || "")}</strong>
+        <small>${escapeHtml(entry.title || "Untitled Timeline Entry")}</small>
+        <small>${escapeHtml(`evidence ${(entry.evidenceIds || []).length} · source ${(entry.sourceIds || []).length}`)}</small>
+      `;
+      button.addEventListener("click", () => {
+        selectTimelineEntry(entry.id).catch((error) => setStatus(`timeline trace 실패: ${error.message}`));
+      });
+      timelineStack.appendChild(button);
+    }
+
+    const activeEntry =
+      (timeline.entries || []).find((entry) => entry.id === state.activeTimelineId) || timeline.entries[0];
+    if (activeEntry) {
+      const detailCard = document.createElement("div");
+      detailCard.className = "trace-section active";
+      detailCard.innerHTML = `
+        <strong>${escapeHtml(activeEntry.title || activeEntry.id || "Timeline Entry")}</strong>
+        <small>${escapeHtml(activeEntry.timestamp || "")}</small>
+        <p class="subtle">${escapeHtml(activeEntry.description || "설명 없음")}</p>
+      `;
+
+      const detailRow = document.createElement("div");
+      detailRow.className = "token-row";
+      for (const evidenceId of activeEntry.evidenceIds || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "token-button";
+        button.textContent = evidenceId;
+        button.addEventListener("click", () => selectArtifact(evidenceId));
+        detailRow.appendChild(button);
+      }
+      for (const sourceId of activeEntry.sourceIds || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "token-button";
+        button.textContent = sourceId;
+        button.addEventListener("click", () => selectArtifact(sourceId));
+        detailRow.appendChild(button);
+      }
+      if (activeEntry.wikiNoteId) {
+        const noteButton = document.createElement("button");
+        noteButton.type = "button";
+        noteButton.className = "token-button token-button-secondary";
+        noteButton.textContent = activeEntry.wikiNoteTitle || "Timeline Note";
+        noteButton.addEventListener("click", () => {
+          loadWikiNote(activeEntry.wikiNoteId).catch((error) => setStatus(`wiki note 로드 실패: ${error.message}`));
+        });
+        detailRow.appendChild(noteButton);
+      }
+      detailCard.appendChild(detailRow);
+      timelineStack.appendChild(detailCard);
+    }
+  } else {
+    timelineStack.innerHTML = '<span class="subtle">등록된 timeline이 없습니다.</span>';
+  }
+  caseDetail.appendChild(timelineCard);
+
+  if (reportData?.content) {
     const reportCard = document.createElement("section");
     reportCard.className = "detail-card";
     reportCard.innerHTML = `
       <h3>Report</h3>
-      <div class="markdown-rendered detail-markdown">${renderMarkdown(reportContent)}</div>
+      <div class="markdown-rendered detail-markdown">${renderMarkdown(reportData.content)}</div>
     `;
     caseDetail.appendChild(reportCard);
   }
 
-  if (graph) {
+  if (graphData?.graph) {
     const graphCard = document.createElement("section");
     graphCard.className = "detail-card";
     graphCard.innerHTML = `
-      <h3>Graph</h3>
-      <pre class="detail-block">${escapeHtml(JSON.stringify(graph, null, 2))}</pre>
+      <h3>Trace Graph</h3>
+      <pre class="detail-block">${escapeHtml(JSON.stringify(graphData.graph, null, 2))}</pre>
     `;
     caseDetail.appendChild(graphCard);
   }
@@ -942,6 +1150,11 @@ function renderCaseDetail(caseData, reportContent = "", graph = null) {
 
 function clearCaseDetail(message = "선택된 case가 없습니다.") {
   state.activeCase = null;
+  state.activeCaseReport = null;
+  state.activeCaseGraph = null;
+  state.activeCaseTimeline = null;
+  state.activeReportSectionId = null;
+  state.activeTimelineId = null;
   caseSummary.textContent = message;
   caseDetail.innerHTML = "";
   artifactDetail.innerHTML = "";
@@ -977,6 +1190,104 @@ function renderArtifactDetail(kind, detail) {
     fileList.innerHTML = '<span class="subtle">관련 파일이 없습니다.</span>';
   }
   artifactDetail.appendChild(filesCard);
+
+  const traceCard = document.createElement("section");
+  traceCard.className = "detail-card";
+  traceCard.innerHTML = '<h3>Traceability</h3><div class="detail-stack"></div>';
+  const traceStack = traceCard.querySelector(".detail-stack");
+
+  const relatedArtifactIds = kind === "source" ? detail.linkedEvidenceIds || [] : detail.linkedSourceIds || [];
+  const relatedLabel = kind === "source" ? "Linked Evidence" : "Linked Sources";
+  const relatedRow = document.createElement("div");
+  relatedRow.className = "token-row";
+  if (relatedArtifactIds.length) {
+    for (const artifactId of relatedArtifactIds) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "token-button";
+      button.textContent = artifactId;
+      button.addEventListener("click", () => selectArtifact(artifactId));
+      relatedRow.appendChild(button);
+    }
+  } else {
+    relatedRow.innerHTML = '<span class="subtle">연결된 artifact가 없습니다.</span>';
+  }
+  const relatedHeading = document.createElement("strong");
+  relatedHeading.textContent = relatedLabel;
+  traceStack.appendChild(relatedHeading);
+  traceStack.appendChild(relatedRow);
+
+  const timelineRow = document.createElement("div");
+  timelineRow.className = "token-row";
+  if ((detail.linkedTimelineIds || []).length) {
+    for (const timelineId of detail.linkedTimelineIds) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "token-button";
+      if (timelineId === state.activeTimelineId) {
+        button.classList.add("active");
+      }
+      button.textContent = timelineId;
+      button.addEventListener("click", () => {
+        selectTimelineEntry(timelineId).catch((error) => setStatus(`timeline trace 실패: ${error.message}`));
+      });
+      timelineRow.appendChild(button);
+    }
+  } else {
+    timelineRow.innerHTML = '<span class="subtle">연결된 timeline이 없습니다.</span>';
+  }
+  const timelineHeading = document.createElement("strong");
+  timelineHeading.textContent = "Linked Timeline";
+  traceStack.appendChild(timelineHeading);
+  traceStack.appendChild(timelineRow);
+
+  const sectionRow = document.createElement("div");
+  sectionRow.className = "token-row";
+  if ((detail.reportSections || []).length) {
+    for (const section of detail.reportSections) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "token-button token-button-secondary";
+      button.textContent = section.title || section.id;
+      button.addEventListener("click", () => {
+        const target =
+          (state.activeCaseReport?.sections || []).find((item) => item.id === section.id) ||
+          (state.activeCase?.reportSections || []).find((item) => item.id === section.id);
+        if (!target) return;
+        selectReportSection(target).catch((error) => setStatus(`section trace 실패: ${error.message}`));
+      });
+      sectionRow.appendChild(button);
+    }
+  } else {
+    sectionRow.innerHTML = '<span class="subtle">연결된 report section이 없습니다.</span>';
+  }
+  const sectionHeading = document.createElement("strong");
+  sectionHeading.textContent = "Report Sections";
+  traceStack.appendChild(sectionHeading);
+  traceStack.appendChild(sectionRow);
+
+  const noteRow = document.createElement("div");
+  noteRow.className = "token-row";
+  if ((detail.wikiNotes || []).length) {
+    for (const note of detail.wikiNotes) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "token-button token-button-secondary";
+      button.textContent = note.title || note.relativePath || "Wiki";
+      button.addEventListener("click", () => {
+        loadWikiNote(note.id).catch((error) => setStatus(`wiki note 로드 실패: ${error.message}`));
+      });
+      noteRow.appendChild(button);
+    }
+  } else {
+    noteRow.innerHTML = '<span class="subtle">연결된 wiki note가 없습니다.</span>';
+  }
+  const noteHeading = document.createElement("strong");
+  noteHeading.textContent = "Wiki Notes";
+  traceStack.appendChild(noteHeading);
+  traceStack.appendChild(noteRow);
+
+  artifactDetail.appendChild(traceCard);
 }
 
 function renderWikiList(notes) {
@@ -1008,7 +1319,7 @@ function renderWikiList(notes) {
 function renderWikiNote(note) {
   wikiPreview.innerHTML = `
     <h3>${escapeHtml(note.title || "Untitled")}</h3>
-    <p class="detail-meta">${escapeHtml(note.metadata?.created_at || "")}</p>
+    <p class="detail-meta">${escapeHtml(note.metadata?.created_at || note.metadata?.updated_at || "")}</p>
     <div class="markdown-rendered note-markdown">${renderMarkdown(note.content || "")}</div>
   `;
 }
@@ -1199,6 +1510,7 @@ function handleSocketEvent(event) {
     }
     setStatus("답변을 마무리하는 중입니다.");
     refreshSessions();
+    refreshCases().catch((error) => setStatus(`case 새로고침 실패: ${error.message}`));
     refreshWikiNotes();
     return;
   }
@@ -1234,6 +1546,7 @@ function handleSocketEvent(event) {
     }
     setStatus(wasStopRequested ? "응답 생성이 중지되었습니다." : "응답이 완료되었습니다.");
     refreshSessions();
+    refreshCases().catch((error) => setStatus(`case 새로고침 실패: ${error.message}`));
     refreshWikiNotes();
   }
 }
@@ -1279,6 +1592,8 @@ async function refreshCases() {
     const selectedCaseId = caseIdInput.value.trim();
     if (selectedCaseId) {
       await loadCase(selectedCaseId, { quiet: true });
+    } else if (state.cases.length === 1) {
+      await selectCase(state.cases[0].id);
     } else if (!state.cases.length) {
       clearCaseDetail("아직 case 폴더가 없습니다.");
     }
@@ -1294,15 +1609,21 @@ async function loadCase(caseId, { quiet = false } = {}) {
     return;
   }
 
+  if (state.activeCase && state.activeCase.id !== caseId) {
+    state.activeReportSectionId = null;
+    state.activeTimelineId = null;
+  }
+
   setCaseDetailStatus("loading");
   try {
     const detail = await apiJson(`/api/cases/${encodeURIComponent(caseId)}`);
-    const [reportData, graphData] = await Promise.all([
+    const [reportData, graphData, timelineData] = await Promise.all([
       apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/report`),
       apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/graph`),
+      apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/timeline`),
     ]);
 
-    renderCaseDetail(detail.case, reportData?.content || "", graphData?.graph || null);
+    renderCaseDetail(detail.case, reportData, graphData, timelineData);
     setCaseDetailStatus("loaded", "success");
 
     const artifactId = artifactIdInput.value.trim();

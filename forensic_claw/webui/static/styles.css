@@ -582,6 +582,54 @@ textarea:focus {
   border-color: rgba(140, 90, 43, 0.36);
 }
 
+.token-button-secondary {
+  background: rgba(43, 36, 25, 0.05);
+  color: var(--text);
+  border-color: rgba(43, 36, 25, 0.12);
+}
+
+.trace-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.trace-section.active {
+  border-color: rgba(140, 90, 43, 0.34);
+  background: rgba(140, 90, 43, 0.08);
+}
+
+.trace-link-card {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.trace-link-card.active {
+  border-color: rgba(140, 90, 43, 0.36);
+  background: rgba(140, 90, 43, 0.12);
+}
+
+.trace-link-card strong,
+.trace-link-card small {
+  display: block;
+}
+
+.trace-link-card small {
+  color: var(--muted);
+}
+
 .file-chip {
   display: inline-flex;
   padding: 6px 10px;

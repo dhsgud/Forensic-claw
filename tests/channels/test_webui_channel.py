@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 from pathlib import Path
 from urllib.parse import quote
 
@@ -12,11 +11,14 @@ from aiohttp.test_utils import TestClient, TestServer
 from forensic_claw.bus.events import OutboundMessage
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.channels.webui import WebUIChannel
+from forensic_claw.forensics import CaseStore, EvidenceMetadata, SourceMetadata
 from forensic_claw.session.manager import SessionManager
 from forensic_claw.session.scopes import build_scoped_session_key
 
 
-async def _make_client(tmp_path: Path) -> tuple[WebUIChannel, MessageBus, SessionManager, TestClient]:
+async def _make_client(
+    tmp_path: Path,
+) -> tuple[WebUIChannel, MessageBus, SessionManager, TestClient]:
     bus = MessageBus()
     channel = WebUIChannel(
         {
@@ -36,46 +38,57 @@ async def _make_client(tmp_path: Path) -> tuple[WebUIChannel, MessageBus, Sessio
 
 
 def _write_case_fixture(workspace: Path) -> None:
-    case_dir = workspace / "forensics" / "cases" / "case-2026-0001"
-    (case_dir / "evidence" / "EVD-001" / "files").mkdir(parents=True, exist_ok=True)
-    (case_dir / "sources" / "SRC-001" / "raw").mkdir(parents=True, exist_ok=True)
-
-    (case_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "id": "case-2026-0001",
-                "title": "Windows execution trace case",
-                "status": "draft",
-                "createdAt": "2026-04-10T10:00:00+09:00",
-                "updatedAt": "2026-04-10T10:30:00+09:00",
-                "summary": "Prefetch와 source를 묶은 테스트 케이스",
-                "tags": ["prefetch", "eventlog"],
-            },
-            ensure_ascii=False,
+    store = CaseStore(workspace)
+    manifest = store.create_case(
+        case_id="case-2026-0001",
+        title="Windows execution trace case",
+        status="draft",
+        created_at="2026-04-10T10:00:00+09:00",
+        updated_at="2026-04-10T10:30:00+09:00",
+        summary="Prefetch and event log correlation case",
+        tags=["prefetch", "eventlog"],
+    )
+    source = store.register_source(
+        manifest.id,
+        SourceMetadata(
+            kind="eventlog",
+            label="Security.evtx",
+            origin_path="Security.evtx",
+            parser="windows_eventlog_query",
+            read_only=True,
         ),
-        encoding="utf-8",
+        raw_files={"Security.evtx": "EVTXDATA"},
     )
-    (case_dir / "report.md").write_text("# Report\n\n초기 실행 흔적 정리", encoding="utf-8")
-    (case_dir / "graph.json").write_text(
-        json.dumps(
-            {
-                "reportSections": [{"id": "sec-1", "title": "Initial Execution", "evidenceIds": ["EVD-001"]}],
-                "evidenceLinks": [{"id": "EVD-001", "sourceIds": ["SRC-001"]}],
-            },
-            ensure_ascii=False,
+    evidence = store.register_evidence(
+        manifest.id,
+        EvidenceMetadata(
+            artifact_type="prefetch",
+            title="Prefetch summary",
+            summary="calc.exe execution evidence",
+            derived_from_source_ids=[source.id],
+            produced_by="windows_prefetch_analyze",
+            confidence=0.93,
+            tags=["execution"],
         ),
-        encoding="utf-8",
+        files={"prefetch.pf": "PFDATA"},
     )
-    (case_dir / "evidence" / "EVD-001" / "metadata.json").write_text(
-        json.dumps({"kind": "prefetch", "hash": "abc123"}, ensure_ascii=False),
-        encoding="utf-8",
+    timeline = store.add_timeline_entry(
+        manifest.id,
+        timestamp="2026-04-10T10:12:00+09:00",
+        title="calc.exe launched",
+        description="Execution observed in Security.evtx and Prefetch correlation",
+        evidence_ids=[evidence.id or ""],
+        source_ids=[source.id or ""],
+        kind="execution",
     )
-    (case_dir / "evidence" / "EVD-001" / "files" / "prefetch.pf").write_text("PFDATA", encoding="utf-8")
-    (case_dir / "sources" / "SRC-001" / "metadata.json").write_text(
-        json.dumps({"kind": "eventlog", "origin": "Security.evtx"}, ensure_ascii=False),
-        encoding="utf-8",
+    store.update_report_graph(
+        manifest.id,
+        report_section_id="sec-1",
+        report_section_title="Initial Execution",
+        evidence_ids=[evidence.id or ""],
+        source_ids=[source.id or ""],
+        timeline_ids=[timeline.id or ""],
     )
-    (case_dir / "sources" / "SRC-001" / "raw" / "Security.evtx").write_text("EVTXDATA", encoding="utf-8")
 
     wiki_dir = workspace / "wiki" / "cases" / "case-2026-0001" / "artifacts" / "EVD-001"
     wiki_dir.mkdir(parents=True, exist_ok=True)
@@ -125,7 +138,12 @@ async def test_webui_bootstrap_and_chat_publish_scoped_inbound(tmp_path: Path) -
         )
         assert response.status == 200
         payload = await response.json()
-        assert payload["sessionKey"] == "webui:sess_" + session_id.split("sess_", 1)[1] + ":case:Case-Alpha:artifact:Prefetch-1"
+        assert (
+            payload["sessionKey"]
+            == "webui:sess_"
+            + session_id.split("sess_", 1)[1]
+            + ":case:Case-Alpha:artifact:Prefetch-1"
+        )
 
         inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
         assert inbound.chat_id == session_id
@@ -305,7 +323,9 @@ async def test_webui_ws_receives_shell_trace_and_bootstrap_replays_it(tmp_path: 
         assert trace_event["trace"]["command"] == "Get-Date"
         assert trace_event["sessionKey"] == f"webui:{session_id}:case:Case-Alpha:artifact:EVD-001"
 
-        bootstrap = await (await client.get("/api/bootstrap", params={"sessionId": session_id})).json()
+        bootstrap = await (
+            await client.get("/api/bootstrap", params={"sessionId": session_id})
+        ).json()
         assert bootstrap["shellTraces"][0]["trace"]["traceId"] == "call_exec_1"
         assert bootstrap["shellTraces"][0]["trace"]["status"] == "running"
 
@@ -315,7 +335,9 @@ async def test_webui_ws_receives_shell_trace_and_bootstrap_replays_it(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_webui_bootstrap_reset_rotates_browser_session_and_clears_shell_traces(tmp_path: Path) -> None:
+async def test_webui_bootstrap_reset_rotates_browser_session_and_clears_shell_traces(
+    tmp_path: Path,
+) -> None:
     channel, _bus, _session_manager, client = await _make_client(tmp_path)
 
     try:
@@ -371,14 +393,18 @@ async def test_webui_sessions_api_filters_to_browser_session(tmp_path: Path) -> 
         assert data["sessions"][0]["caseId"] == "Case-Alpha"
 
         encoded_key = quote(key_a, safe="")
-        response = await client.get(f"/api/sessions/{encoded_key}", params={"sessionId": "browser-a"})
+        response = await client.get(
+            f"/api/sessions/{encoded_key}", params={"sessionId": "browser-a"}
+        )
         assert response.status == 200
         detail = await response.json()
         assert detail["session"]["key"] == key_a
         assert detail["session"]["messages"][0]["content"] == "u1"
         assert detail["session"]["messages"][1]["thinkingText"] == "숨겨진 생각"
 
-        forbidden = await client.get(f"/api/sessions/{encoded_key}", params={"sessionId": "browser-b"})
+        forbidden = await client.get(
+            f"/api/sessions/{encoded_key}", params={"sessionId": "browser-b"}
+        )
         assert forbidden.status == 404
     finally:
         await client.close()
@@ -399,43 +425,91 @@ async def test_webui_case_and_wiki_read_only_apis(tmp_path: Path) -> None:
         cases = await response.json()
         assert cases["cases"][0]["id"] == "case-2026-0001"
         assert cases["cases"][0]["evidenceCount"] == 1
+        assert cases["cases"][0]["sourceCount"] == 1
+        assert cases["cases"][0]["timelineCount"] == 1
+        assert cases["cases"][0]["reportSectionCount"] == 1
 
         response = await client.get("/api/cases/case-2026-0001")
         detail = await response.json()
         assert detail["case"]["manifest"]["title"] == "Windows execution trace case"
         assert detail["case"]["evidenceIds"] == ["EVD-001"]
         assert detail["case"]["sourceIds"] == ["SRC-001"]
+        assert detail["case"]["timelineIds"] == ["TLN-001"]
+        assert detail["case"]["timelineDates"] == ["2026-04-10"]
+        assert detail["case"]["reportSections"][0]["timelineIds"] == ["TLN-001"]
 
         response = await client.get("/api/cases/case-2026-0001/report")
         report = await response.json()
-        assert "초기 실행 흔적" in report["content"]
+        assert "Initial Execution" in report["content"]
+        assert report["sections"][0]["id"] == "sec-1"
+        assert report["sections"][0]["evidenceIds"] == ["EVD-001"]
+        assert report["sections"][0]["sourceIds"] == ["SRC-001"]
+        assert report["sections"][0]["timelineIds"] == ["TLN-001"]
 
         response = await client.get("/api/cases/case-2026-0001/graph")
         graph = await response.json()
         assert graph["graph"]["evidenceLinks"][0]["sourceIds"] == ["SRC-001"]
+        assert graph["reportSections"][0]["timelineIds"] == ["TLN-001"]
+        assert graph["linkIndex"]["timelineToEvidence"] == {"TLN-001": ["EVD-001"]}
+
+        response = await client.get("/api/cases/case-2026-0001/timeline")
+        timeline = await response.json()
+        assert timeline["entries"][0]["id"] == "TLN-001"
+        assert timeline["entries"][0]["evidenceIds"] == ["EVD-001"]
+        assert timeline["entries"][0]["sourceIds"] == ["SRC-001"]
+        assert timeline["dates"][0]["date"] == "2026-04-10"
+        assert isinstance(timeline["dates"][0]["noteId"], str)
 
         response = await client.get("/api/cases/case-2026-0001/evidence/EVD-001")
         evidence = await response.json()
-        assert evidence["metadata"]["kind"] == "prefetch"
+        assert evidence["metadata"]["artifactType"] == "prefetch"
         assert evidence["files"] == ["prefetch.pf"]
+        assert evidence["linkedSourceIds"] == ["SRC-001"]
+        assert evidence["linkedTimelineIds"] == ["TLN-001"]
+        assert {note["title"] for note in evidence["wikiNotes"]} == {
+            "Artifact EVD-001",
+            "Prefetch Summary",
+        }
 
         response = await client.get("/api/cases/case-2026-0001/sources/SRC-001")
         source = await response.json()
-        assert source["metadata"]["origin"] == "Security.evtx"
+        assert source["metadata"]["originPath"] == "Security.evtx"
         assert source["files"] == ["Security.evtx"]
+        assert source["linkedEvidenceIds"] == ["EVD-001"]
+        assert source["linkedTimelineIds"] == ["TLN-001"]
+        assert [item["title"] for item in source["wikiNotes"]] == ["Source SRC-001"]
+
+        response = await client.get(
+            "/api/wiki",
+            params={"sessionId": "browser-a", "caseId": "case-2026-0001"},
+        )
+        notes = await response.json()
+        assert {
+            note["title"]
+            for note in notes["notes"]
+        } >= {"Artifact EVD-001", "Source SRC-001", "Timeline 2026-04-10"}
 
         response = await client.get(
             "/api/wiki",
             params={"sessionId": "browser-a", "caseId": "case-2026-0001", "artifactId": "EVD-001"},
         )
         notes = await response.json()
-        assert notes["notes"][0]["title"] == "Prefetch Summary"
+        assert {note["title"] for note in notes["notes"]} == {
+            "Artifact EVD-001",
+            "Prefetch Summary",
+        }
 
         note_id = notes["notes"][0]["id"]
         response = await client.get(f"/api/wiki/{quote(note_id, safe='')}")
         note = await response.json()
         assert note["note"]["metadata"]["artifact_id"] == "EVD-001"
-        assert "실행 흔적을 정리한 note입니다." in note["note"]["content"]
+
+        response = await client.get(
+            "/api/wiki",
+            params={"sessionId": "browser-a", "caseId": "case-2026-0001", "artifactId": "SRC-001"},
+        )
+        source_notes = await response.json()
+        assert [item["title"] for item in source_notes["notes"]] == ["Source SRC-001"]
     finally:
         await client.close()
 

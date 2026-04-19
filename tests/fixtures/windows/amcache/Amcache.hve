@@ -1,0 +1,11 @@
+{
+  "entries": [
+    {
+      "programName": "calc.exe",
+      "path": "C:\\Windows\\System32\\calc.exe",
+      "sha1": "00112233445566778899aabbccddeeff00112233",
+      "firstSeen": "2026-04-08T12:00:00+09:00",
+      "modifiedAt": "2026-04-09T08:30:00+09:00"
+    }
+  ]
+}
