@@ -1,3 +1,6 @@
+import asyncio
+import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -489,6 +492,50 @@ def test_exec_broker_launcher_uses_runas_once_for_bootstrap(tmp_path: Path) -> N
     assert "Start-Process -FilePath 'powershell.exe'" in script
     assert "-Verb RunAs" in script
     assert "-File'," in script
+
+
+async def test_exec_reads_broker_response_with_utf8_bom(tmp_path: Path) -> None:
+    """Broker responses written with UTF-8 BOM should still parse correctly."""
+    tool = ExecTool(elevate_on_windows=True)
+    session_dir = tmp_path / "broker"
+    session_dir.mkdir()
+    broker = _WindowsElevatedBrokerSession(
+        session_dir=session_dir,
+        shell_exe="powershell.exe",
+        token="token",
+        broker_script_path=session_dir / "broker.ps1",
+        request_path=session_dir / "request.json",
+        response_path=session_dir / "response.json",
+        ready_path=session_dir / "ready.json",
+        stop_path=session_dir / "stop.txt",
+    )
+
+    async def _write_bom_response() -> None:
+        while not broker.request_path.exists():
+            await asyncio.sleep(0.01)
+        request = json.loads(broker.request_path.read_text(encoding="utf-8"))
+        payload = {
+            "requestId": request["requestId"],
+            "stdoutBase64": base64.b64encode(b"ok").decode("ascii"),
+            "stderrBase64": "",
+            "exitCode": 0,
+            "timedOut": False,
+        }
+        broker.response_path.write_text(json.dumps(payload), encoding="utf-8-sig")
+
+    writer = asyncio.create_task(_write_bom_response())
+    stdout, stderr, exit_code, timed_out = await tool._send_windows_broker_request(
+        broker,
+        "echo ok",
+        "C:\\",
+        5,
+    )
+    await writer
+
+    assert stdout == b"ok"
+    assert stderr == b""
+    assert exit_code == 0
+    assert timed_out is False
 
 
 # --- _resolve_type and nullable param tests ---

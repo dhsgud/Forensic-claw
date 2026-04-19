@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from forensic_claw.forensics import CaseStore
 from forensic_claw.forensics.windows.prefetch import (
+    _build_pecmd_failure_detail,
     _bundled_pecmd_candidates,
     _resolve_pecmd_executable,
     analyze_prefetch_artifact,
@@ -108,3 +110,38 @@ def test_prefetch_parser_resolves_bundled_pecmd_when_present(monkeypatch) -> Non
 
     assert resolved == _bundled_pecmd_candidates()[0]
     assert resolved.is_file()
+
+
+def test_prefetch_failure_mentions_missing_dotnet_runtime(tmp_path: Path) -> None:
+    pecmd_path = tmp_path / "PECmd.exe"
+    pecmd_path.write_bytes(b"MZ")
+    runtimeconfig = tmp_path / "PECmd.runtimeconfig.json"
+    runtimeconfig.write_text(
+        json.dumps(
+            {
+                "runtimeOptions": {
+                    "framework": {
+                        "name": "Microsoft.NETCore.App",
+                        "version": "9.0.0",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.CompletedProcess(
+        args=[str(pecmd_path)],
+        returncode=1,
+        stdout="",
+        stderr="You must install .NET to run this application.",
+    )
+
+    detail = _build_pecmd_failure_detail(
+        Path(r"C:\Windows\Prefetch\TEST.EXE-12345678.pf"),
+        pecmd_path,
+        completed,
+    )
+
+    assert "missing .NET runtime or framework dependency" in detail
+    assert "Microsoft.NETCore.App 9.0.0" in detail

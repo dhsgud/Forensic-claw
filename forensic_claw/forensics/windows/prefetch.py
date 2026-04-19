@@ -58,6 +58,40 @@ def _resolve_pecmd_executable() -> str:
     )
 
 
+def _pecmd_runtime_requirement(pecmd_path: str | Path) -> str | None:
+    runtimeconfig = Path(pecmd_path).with_suffix(".runtimeconfig.json")
+    if not runtimeconfig.is_file():
+        return None
+    try:
+        payload = json.loads(runtimeconfig.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    framework = payload.get("runtimeOptions", {}).get("framework", {})
+    name = framework.get("name")
+    version = framework.get("version")
+    if not isinstance(name, str) or not isinstance(version, str):
+        return None
+    return f"{name} {version}"
+
+
+def _build_pecmd_failure_detail(
+    prefetch_path: Path,
+    pecmd_path: str | Path,
+    completed: subprocess.CompletedProcess[str],
+) -> str:
+    detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
+    lowered = detail.lower()
+    runtime_requirement = _pecmd_runtime_requirement(pecmd_path)
+    if ".net" in lowered or "framework" in lowered or "dotnet" in lowered:
+        suffix = f" Required runtime: {runtime_requirement}." if runtime_requirement else ""
+        return (
+            f"PECmd failed for {prefetch_path}: missing .NET runtime or framework dependency."
+            f"{suffix} Original error: {detail}"
+        )
+    return f"PECmd failed for {prefetch_path}: {detail}"
+
+
 def run_pecmd_prefetch(
     prefetch_path: Path,
     *,
@@ -91,8 +125,7 @@ def run_pecmd_prefetch(
             check=False,
         )
         if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip() or "unknown error"
-            raise RuntimeError(f"PECmd failed for {prefetch_path}: {detail}")
+            raise RuntimeError(_build_pecmd_failure_detail(prefetch_path, pecmd, completed))
 
         output_path = output_dir / output_name
         if not output_path.is_file():

@@ -511,7 +511,7 @@ class ExecTool(Tool):
         deadline = time.monotonic() + timeout + self._BROKER_RESPONSE_GRACE
         while time.monotonic() < deadline:
             if broker.response_path.is_file():
-                payload = json.loads(broker.response_path.read_text(encoding="utf-8"))
+                payload = json.loads(broker.response_path.read_text(encoding="utf-8-sig"))
                 broker.response_path.unlink(missing_ok=True)
                 if payload.get("requestId") != request_id:
                     raise RuntimeError("Elevated broker returned a mismatched response")
@@ -589,7 +589,9 @@ function Write-ForensicClawBrokerJson {
     )
 
     $tmpPath = $TargetPath + '.tmp'
-    $Payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $tmpPath -Encoding utf8
+    $json = $Payload | ConvertTo-Json -Compress
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($tmpPath, $json, $utf8NoBom)
     Move-Item -LiteralPath $tmpPath -Destination $TargetPath -Force
 }
 

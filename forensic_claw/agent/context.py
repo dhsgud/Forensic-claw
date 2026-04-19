@@ -90,6 +90,7 @@ Skills with available="false" need dependencies installed first - you can try in
             platform_policy = """## Platform Policy (Windows)
 - You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.
 - Prefer Windows-native commands or file tools when they are more reliable.
+- Prefer PowerShell syntax and PowerShell-native commands over `cmd.exe` on Windows unless the task explicitly requires batch semantics.
 - Do not assume `python`, `py`, or `python.exe` exists on the host just because forensic-claw is running.
 - For operational work, prefer direct shell commands, PowerShell, built-in tools, and bundled executables over ad-hoc Python scripts.
 - Only write or run Python scripts when the user explicitly asks for Python, the workspace already contains the intended Python entrypoint, or no reliable non-Python option exists and the runtime is confirmed.

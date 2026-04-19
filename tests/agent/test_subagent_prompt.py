@@ -14,5 +14,6 @@ def test_subagent_prompt_discourages_python_runtime_dependency(tmp_path) -> None
 
     prompt = manager._build_subagent_prompt()
 
+    assert "prefer PowerShell commands over `cmd.exe`" in prompt
     assert "Do not assume `python` or `python.exe` exists on the host." in prompt
     assert "Prefer direct shell commands, PowerShell, existing tools, and bundled executables" in prompt
