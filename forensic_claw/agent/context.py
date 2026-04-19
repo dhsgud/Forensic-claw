@@ -91,6 +91,7 @@ Skills with available="false" need dependencies installed first - you can try in
 - You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.
 - Prefer Windows-native commands or file tools when they are more reliable.
 - Prefer PowerShell syntax and PowerShell-native commands over `cmd.exe` on Windows unless the task explicitly requires batch semantics.
+- When using the exec tool on Windows, send raw PowerShell statements only. Do not wrap them in `powershell -Command`, `pwsh -Command`, or `cmd /c`.
 - Do not assume `python`, `py`, or `python.exe` exists on the host just because forensic-claw is running.
 - For operational work, prefer direct shell commands, PowerShell, built-in tools, and bundled executables over ad-hoc Python scripts.
 - Only write or run Python scripts when the user explicitly asks for Python, the workspace already contains the intended Python entrypoint, or no reliable non-Python option exists and the runtime is confirmed.
@@ -128,6 +129,7 @@ Your workspace is at: {workspace_path}
 - If a tool call fails, analyze the error before retrying with a different approach.
 - Ask for clarification when the request is ambiguous.
 - Avoid creating one-off helper scripts for execution if an existing tool, direct shell command, PowerShell snippet, or bundled executable can solve the task.
+- Prefer dedicated forensic tools such as `windows_prefetch_analyze`, `windows_eventlog_query`, `windows_amcache_analyze`, and `windows_timeline_build` over generic exec commands when they fit the task.
 - For target-host forensic collection and incident response tasks, assume external Python may be absent unless the environment has already confirmed otherwise.
 - For very large local datasets such as Windows event logs, recursive log folders, or broad artifact collections, do not dump raw output into the conversation unless necessary.
 - For those large datasets, prefer constrained queries, counts, filtered slices, and structured summaries over raw full-text dumps.

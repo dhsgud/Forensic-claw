@@ -126,6 +126,29 @@ def test_exec_extract_absolute_paths_captures_quoted_paths() -> None:
     assert "~/.forensic-claw/config.json" in paths
 
 
+def test_exec_normalizes_nested_powershell_command_on_windows(monkeypatch) -> None:
+    tool = ExecTool(elevate_on_windows=False)
+    monkeypatch.setattr("forensic_claw.agent.tools.shell.sys.platform", "win32")
+
+    normalized = tool._normalize_command_for_execution(
+        'powershell -Command "Get-ChildItem -Path \'C:\\Windows\\Prefetch\' -File"'
+    )
+
+    assert normalized == "Get-ChildItem -Path 'C:\\Windows\\Prefetch' -File"
+
+
+def test_exec_describe_execution_shows_normalized_windows_command(monkeypatch) -> None:
+    tool = ExecTool(elevate_on_windows=False)
+    monkeypatch.setattr("forensic_claw.agent.tools.shell.sys.platform", "win32")
+    monkeypatch.setattr(tool, "_preferred_windows_shell", lambda: "powershell.exe")
+
+    plan = tool.describe_execution(
+        command='powershell -Command "Get-ChildItem -Path \'C:\\Windows\\Prefetch\' -File"'
+    )
+
+    assert plan["command"] == "Get-ChildItem -Path 'C:\\Windows\\Prefetch' -File"
+
+
 def test_exec_guard_blocks_home_path_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
     error = tool._guard_command("cat ~/.forensic-claw/config.json", str(tmp_path))
@@ -136,6 +159,15 @@ def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
     error = tool._guard_command('cat "~/.forensic-claw/config.json"', str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
+
+
+def test_exec_guard_prefetch_probe_suggests_dedicated_tool(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-ChildItem -Path 'C:\\Windows\\Prefetch' -File | Select-Object -First 10 Name",
+        str(tmp_path),
+    )
+    assert "windows_prefetch_analyze" in (error or "")
 
 
 # --- cast_params tests ---

@@ -86,7 +86,10 @@ class ExecTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Execute a shell command and return its output. Use with caution."
+        return (
+            "Execute a shell command and return its output. On Windows, pass raw PowerShell "
+            "statements instead of wrapping them with powershell -Command or cmd /c."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -121,6 +124,7 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str:
+        command = self._normalize_command_for_execution(command)
         cwd = working_dir or self.working_dir or os.getcwd()
         guard_error = self._guard_command(command, cwd)
         if guard_error:
@@ -157,6 +161,7 @@ class ExecTool(Tool):
         timeout: int | None = None,
     ) -> dict[str, Any]:
         """Describe how this tool will launch a shell command."""
+        command = self._normalize_command_for_execution(command)
         cwd = working_dir or self.working_dir or os.getcwd()
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
 
@@ -393,6 +398,35 @@ class ExecTool(Tool):
             "$OutputEncoding = [Console]::OutputEncoding\n"
             f"{command}\n"
         )
+
+    def _normalize_command_for_execution(self, command: str) -> str:
+        normalized = command.strip()
+        if sys.platform != "win32" or not normalized:
+            return normalized
+
+        unwrapped = self._unwrap_windows_powershell_command(normalized)
+        return unwrapped if unwrapped is not None else normalized
+
+    @staticmethod
+    def _unwrap_windows_powershell_command(command: str) -> str | None:
+        match = re.match(r'^\s*(?P<exe>"[^"]+"|\'[^\']+\'|\S+)\s+(?P<rest>.+)$', command)
+        if not match:
+            return None
+
+        exe_token = match.group("exe").strip().strip("\"'")
+        exe_name = Path(exe_token).name.lower()
+        if exe_name not in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
+            return None
+
+        rest = match.group("rest")
+        body_match = re.search(r'(?i)(?:^|\s)-(?:command|c)\s+(?P<body>.+)$', rest)
+        if not body_match:
+            return None
+
+        body = body_match.group("body").strip()
+        if len(body) >= 2 and body[0] == body[-1] and body[0] in {'"', "'"}:
+            body = body[1:-1]
+        return body.strip() or None
 
     async def _execute_via_windows_broker(
         self,
@@ -797,9 +831,20 @@ while ($true) {
                 except Exception:
                     continue
                 if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
+                    if self._looks_like_windows_prefetch_probe(cmd):
+                        return (
+                            "Error: Command blocked by safety guard (path outside working dir). "
+                            "For Windows Prefetch artifacts, use the windows_prefetch_analyze tool "
+                            "instead of exec."
+                        )
                     return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
+
+    @staticmethod
+    def _looks_like_windows_prefetch_probe(command: str) -> bool:
+        lowered = command.lower()
+        return "\\windows\\prefetch" in lowered or "layout.ini" in lowered
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

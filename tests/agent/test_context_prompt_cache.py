@@ -38,6 +38,7 @@ def test_tools_template_discourages_ad_hoc_python_scripts() -> None:
     assert "Do not assume `python` or `python.exe` exists on the host." in content
     assert "Prefer direct shell commands, PowerShell, built-in tools, and bundled executables" in content
     assert "prefer PowerShell commands over `cmd.exe`" in content
+    assert "Do not wrap them in `powershell -Command`, `pwsh -Command`, or `cmd /c`" in content
 
 
 def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:
@@ -130,3 +131,4 @@ def test_windows_system_prompt_discourages_ad_hoc_python_scripts(tmp_path, monke
     assert "Do not assume `python`, `py`, or `python.exe` exists on the host" in prompt
     assert "prefer direct shell commands, PowerShell, built-in tools, and bundled executables" in prompt
     assert "Prefer PowerShell syntax and PowerShell-native commands over `cmd.exe`" in prompt
+    assert "Do not wrap them in `powershell -Command`, `pwsh -Command`, or `cmd /c`" in prompt
