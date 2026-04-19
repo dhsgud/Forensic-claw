@@ -31,6 +31,14 @@ def test_bootstrap_files_are_backed_by_templates() -> None:
         assert (template_dir / filename).is_file(), f"missing bootstrap template: {filename}"
 
 
+def test_tools_template_discourages_ad_hoc_python_scripts() -> None:
+    template_dir = pkg_files("forensic_claw") / "templates"
+    content = (template_dir / "TOOLS.md").read_text(encoding="utf-8")
+
+    assert "Do not assume `python` or `python.exe` exists on the host." in content
+    assert "Prefer direct shell commands, PowerShell, built-in tools, and bundled executables" in content
+
+
 def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:
     """System prompt should not change just because wall clock minute changes."""
     monkeypatch.setattr(datetime_module, "datetime", _FakeDatetime)
@@ -103,3 +111,20 @@ def test_windows_runtime_descriptor_reports_x86_process_on_x64_os(tmp_path, monk
     prompt = builder.build_system_prompt()
 
     assert "Windows OS x64, Python 3.11.8 (32-bit process, arch x86)" in prompt
+
+
+def test_windows_system_prompt_discourages_ad_hoc_python_scripts(tmp_path, monkeypatch) -> None:
+    workspace = _make_workspace(tmp_path)
+    builder = ContextBuilder(workspace)
+
+    monkeypatch.setattr("forensic_claw.agent.context.platform.system", lambda: "Windows")
+    monkeypatch.setattr("forensic_claw.agent.context.platform.machine", lambda: "AMD64")
+    monkeypatch.setattr("forensic_claw.agent.context.platform.python_version", lambda: "3.12.9")
+    monkeypatch.setattr(ContextBuilder, "_python_bitness", staticmethod(lambda: 64))
+    monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "AMD64")
+    monkeypatch.delenv("PROCESSOR_ARCHITEW6432", raising=False)
+
+    prompt = builder.build_system_prompt()
+
+    assert "Do not assume `python`, `py`, or `python.exe` exists on the host" in prompt
+    assert "prefer direct shell commands, PowerShell, built-in tools, and bundled executables" in prompt

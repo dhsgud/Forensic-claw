@@ -1,9 +1,9 @@
-import base64
+from pathlib import Path
 from typing import Any
 
 from forensic_claw.agent.tools.base import Tool
 from forensic_claw.agent.tools.registry import ToolRegistry
-from forensic_claw.agent.tools.shell import ExecTool
+from forensic_claw.agent.tools.shell import ExecTool, _WindowsElevatedBrokerSession
 
 
 class SampleTool(Tool):
@@ -419,38 +419,76 @@ async def test_exec_decodes_cp949_stdout() -> None:
     assert "Exit code: 0" in result
 
 
-async def test_exec_wraps_windows_commands_with_runas_when_elevation_is_enabled(
+async def test_exec_reuses_windows_broker_after_first_elevation_prompt(
+    tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Windows exec should relaunch through Start-Process -Verb RunAs when configured."""
+    """Windows exec should bootstrap one elevated broker and reuse it for later commands."""
     tool = ExecTool(elevate_on_windows=True)
-    captured: dict[str, str] = {}
+    launches = 0
+    seen_commands: list[str] = []
 
-    class _DummyProcess:
-        pid = 1234
-        returncode = 0
+    session_dir = tmp_path / "broker"
+    session_dir.mkdir()
+    ready_path = session_dir / "ready.json"
+    ready_path.write_text("{}", encoding="utf-8")
+    broker = _WindowsElevatedBrokerSession(
+        session_dir=session_dir,
+        shell_exe="powershell.exe",
+        token="token",
+        broker_script_path=session_dir / "broker.ps1",
+        request_path=session_dir / "request.json",
+        response_path=session_dir / "response.json",
+        ready_path=ready_path,
+        stop_path=session_dir / "stop.txt",
+    )
 
-    async def fake_create_subprocess_exec(*args, **kwargs):
-        captured["shell"] = args[0]
-        encoded_index = args.index("-EncodedCommand") + 1
-        captured["script"] = base64.b64decode(args[encoded_index]).decode("utf-16-le")
-        return _DummyProcess()
+    async def fake_launch(shell_exe, env):
+        nonlocal launches
+        launches += 1
+        return broker
+
+    async def fake_send(session, command, cwd, timeout):
+        seen_commands.append(command)
+        return command.encode("utf-8"), b"", 0, False
 
     monkeypatch.setattr("forensic_claw.agent.tools.shell.sys.platform", "win32")
     monkeypatch.setattr(tool, "_is_windows_admin", lambda: False)
     monkeypatch.setattr(tool, "_preferred_windows_shell", lambda: "powershell.exe")
-    monkeypatch.setattr(
-        "forensic_claw.agent.tools.shell.asyncio.create_subprocess_exec",
-        fake_create_subprocess_exec,
+    monkeypatch.setattr(tool, "_launch_windows_broker", fake_launch)
+    monkeypatch.setattr(tool, "_send_windows_broker_request", fake_send)
+    monkeypatch.setattr(ExecTool, "_windows_broker", None)
+    monkeypatch.setattr(ExecTool, "_windows_broker_lock", None)
+    monkeypatch.setattr(ExecTool, "_windows_broker_atexit_registered", False)
+
+    first = await tool.execute(command="echo one")
+    second = await tool.execute(command="echo two")
+
+    assert launches == 1
+    assert seen_commands == ["echo one", "echo two"]
+    assert "echo one" in first
+    assert "echo two" in second
+
+
+def test_exec_broker_launcher_uses_runas_once_for_bootstrap(tmp_path: Path) -> None:
+    """Broker bootstrap still uses RunAs, but only for the initial session startup."""
+    session_dir = tmp_path / "broker"
+    broker = _WindowsElevatedBrokerSession(
+        session_dir=session_dir,
+        shell_exe="powershell.exe",
+        token="token",
+        broker_script_path=session_dir / "broker.ps1",
+        request_path=session_dir / "request.json",
+        response_path=session_dir / "response.json",
+        ready_path=session_dir / "ready.json",
+        stop_path=session_dir / "stop.txt",
     )
 
-    await tool._spawn_process("Write-Output 'hello'", "C:\\", {})
+    script = ExecTool._build_windows_broker_launcher_script(broker)
 
-    assert captured["shell"] == "powershell.exe"
-    assert "Start-Process -FilePath 'powershell.exe'" in captured["script"]
-    assert "-Verb RunAs" in captured["script"]
-    assert "Write-Output 'hello'" not in captured["script"]
-    assert "FromBase64String" in captured["script"]
+    assert "Start-Process -FilePath 'powershell.exe'" in script
+    assert "-Verb RunAs" in script
+    assert "-File'," in script
 
 
 # --- _resolve_type and nullable param tests ---
