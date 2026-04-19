@@ -1,12 +1,11 @@
 """CLI commands for forensic-claw."""
 
 import asyncio
-from contextlib import contextmanager, nullcontext
-
 import os
 import select
 import signal
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -304,7 +303,12 @@ def onboard(
     ),
 ):
     """Initialize forensic-claw configuration and workspace."""
-    from forensic_claw.config.loader import get_config_path, load_config, save_config, set_config_path
+    from forensic_claw.config.loader import (
+        get_config_path,
+        load_config,
+        save_config,
+        set_config_path,
+    )
     from forensic_claw.config.schema import Config
 
     wizard_enabled = _should_enable_onboard_wizard(wizard)
@@ -492,6 +496,7 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
 def _warn_deprecated_config_keys(config_path: Path | None) -> None:
     """Hint users to remove obsolete keys from their config file."""
     import json
+
     from forensic_claw.config.loader import get_config_path
 
     path = config_path or get_config_path()

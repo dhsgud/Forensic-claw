@@ -1,7 +1,7 @@
 import pytest
 
-from forensic_claw.utils.evaluator import evaluate_response
 from forensic_claw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from forensic_claw.utils.evaluator import evaluate_response
 
 
 class DummyProvider(LLMProvider):

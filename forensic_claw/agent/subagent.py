@@ -9,13 +9,18 @@ from typing import Any
 from loguru import logger
 
 from forensic_claw.agent.skills import BUILTIN_SKILLS_DIR
-from forensic_claw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from forensic_claw.agent.tools.filesystem import (
+    EditFileTool,
+    ListDirTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from forensic_claw.agent.tools.registry import ToolRegistry
 from forensic_claw.agent.tools.shell import ExecTool
 from forensic_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from forensic_claw.bus.events import InboundMessage
 from forensic_claw.bus.queue import MessageBus
-from forensic_claw.config.schema import ExecToolConfig
+from forensic_claw.config.schema import ExecToolConfig, WebSearchConfig
 from forensic_claw.providers.base import LLMProvider
 from forensic_claw.utils.helpers import build_assistant_message
 
@@ -29,15 +34,13 @@ class SubagentManager:
         workspace: Path,
         bus: MessageBus,
         model: str | None = None,
-        web_search_config: "WebSearchConfig | None" = None,
+        web_search_config: WebSearchConfig | None = None,
         web_proxy: str | None = None,
-        exec_config: "ExecToolConfig | None" = None,
+        exec_config: ExecToolConfig | None = None,
         restrict_to_workspace: bool = False,
         thinking_language: str = "en",
         response_language: str = "ko",
     ):
-        from forensic_claw.config.schema import ExecToolConfig, WebSearchConfig
-
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
@@ -114,7 +117,7 @@ class SubagentManager:
             ))
             tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
             tools.register(WebFetchTool(proxy=self.web_proxy))
-            
+
             system_prompt = self._build_subagent_prompt()
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -227,7 +230,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
         await self.bus.publish_inbound(msg)
         logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
-    
+
     def _build_subagent_prompt(self) -> str:
         """Build a focused system prompt for the subagent."""
         from forensic_claw.agent.context import ContextBuilder

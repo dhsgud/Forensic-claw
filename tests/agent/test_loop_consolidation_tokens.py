@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from forensic_claw.agent.loop import AgentLoop
 import forensic_claw.agent.memory as memory_module
+from forensic_claw.agent.loop import AgentLoop
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.providers.base import LLMResponse
 

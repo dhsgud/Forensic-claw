@@ -4,7 +4,6 @@ import pytest
 
 from forensic_claw.agent.tools.shell import ExecTool
 
-
 RAW_EVENTS = """Event[0]
   Log Name: System
   Source: EventLog

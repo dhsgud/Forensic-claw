@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from forensic_claw.bus.events import InboundMessage, OutboundMessage
+from forensic_claw.bus.events import InboundMessage
 from forensic_claw.providers.base import LLMResponse
 
 

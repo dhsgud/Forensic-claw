@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import os
+import re
 import time
 from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
@@ -15,18 +15,23 @@ from loguru import logger
 
 from forensic_claw.agent.context import ContextBuilder
 from forensic_claw.agent.memory import MemoryConsolidator
+from forensic_claw.agent.skills import BUILTIN_SKILLS_DIR
 from forensic_claw.agent.subagent import SubagentManager
 from forensic_claw.agent.tools.cron import CronTool
-from forensic_claw.agent.skills import BUILTIN_SKILLS_DIR
-from forensic_claw.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from forensic_claw.agent.tools.filesystem import (
+    EditFileTool,
+    ListDirTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from forensic_claw.agent.tools.message import MessageTool
 from forensic_claw.agent.tools.registry import ToolRegistry
 from forensic_claw.agent.tools.shell import ExecTool
 from forensic_claw.agent.tools.spawn import SpawnTool
 from forensic_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from forensic_claw.bus.events import InboundMessage, OutboundMessage
-from forensic_claw.command import CommandContext, CommandRouter, register_builtin_commands
 from forensic_claw.bus.queue import MessageBus
+from forensic_claw.command import CommandContext, CommandRouter, register_builtin_commands
 from forensic_claw.providers.base import LLMProvider
 from forensic_claw.session.manager import Session, SessionManager
 from forensic_claw.utils.helpers import extract_message_thinking_text, extract_think

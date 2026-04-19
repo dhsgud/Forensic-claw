@@ -8,11 +8,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from forensic_claw.utils.helpers import current_time_str
-
 from forensic_claw.agent.memory import MemoryStore
 from forensic_claw.agent.skills import SkillsLoader
-from forensic_claw.utils.helpers import build_assistant_message, detect_image_mime
+from forensic_claw.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
 
 class ContextBuilder:

@@ -11,7 +11,6 @@ from unittest.mock import patch
 from forensic_claw.providers.base import ToolCallRequest
 from forensic_claw.providers.openai_compat_provider import OpenAICompatProvider
 
-
 GEMINI_EXTRA = {"google": {"thought_signature": "sig-abc-123"}}
 
 

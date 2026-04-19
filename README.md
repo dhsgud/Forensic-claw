@@ -4,7 +4,7 @@
   <img src="forensic_claw_logo.png" alt="Forensic-Claw Logo" width="400">
 </div>
 
-로컬 LLM 기반의 경량 에이전트 프레임워크입니다. 현재 이 저장소는 `Discord`와 `KakaoTalk` 채널, 그리고 `vLLM` 또는 `Custom OpenAI-compatible endpoint (llama.cpp 등)`만 지원하도록 정리되어 있습니다.
+로컬 LLM 기반 에이전트 프레임워크이자 Native Windows 지향 포렌식 워크벤치의 기반 저장소입니다. 현재 이 저장소는 `discord`, `kakaotalk`, `webui` 채널과 `vllm`, `custom` provider를 중심으로 정리되어 있으며, WebUI 채팅/세션/읽기 API와 Windows 런타임 baseline까지 포함합니다.
 
 ## 기획 배경
 
@@ -20,13 +20,14 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 
 - `discord`
 - `kakaotalk`
+- `webui`
 
 ### 프로바이더
 
 - `vllm`
 - `custom`
 
-### 유지되는 핵심 엔진
+### 현재 구현된 핵심 기능
 
 - agent loop
 - context/session/memory
@@ -34,8 +35,22 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - bus
 - cron
 - heartbeat
+- WebUI chat, session, streaming, shell trace, read-only case explorer
+- channel plugin discovery via `forensic_claw.channels`
+- Native Windows baseline and Windows CI
 
-## 계획 문서
+### 아직 남아 있는 핵심 범위
+
+- `forensic_claw/forensics/` 도메인 계층
+- Windows artifact native tools
+- structured case write pipeline
+- wiki/report 자동화
+
+## 기준 문서
+
+- [통합 개발 스펙](docs/MASTER_DEVELOPMENT_SPEC.md)
+
+아래 문서들은 참조용 계획 문서이며, 현재 실행 기준은 `docs/MASTER_DEVELOPMENT_SPEC.md`입니다.
 
 - [Native Windows Support Plan](docs/NATIVE_WINDOWS_SUPPORT_PLAN.md)
 - [Local Web UI Forensic Workbench Plan](docs/LOCAL_WEB_UI_FORENSIC_WORKBENCH_PLAN.md)
@@ -44,6 +59,14 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - [Windows Forensic Automation Plan](docs/WINDOWS_FORENSIC_AUTOMATION_PLAN.md)
 - [Windows Artifact MCP Overview](docs/WINDOWS_ARTIFACT_MCP_OVERVIEW.md)
 - [Windows Artifact Integration Strategy](docs/WINDOWS_ARTIFACT_INTEGRATION_STRATEGY.md)
+
+## 개발 기준 명령
+
+```bash
+uv sync --all-extras
+python -m pytest tests -q
+ruff check forensic_claw tests
+```
 
 ## Native Windows 설치 및 실행
 
@@ -254,14 +277,16 @@ python -m forensic_claw status
 개발 환경이라 전체 테스트까지 확인하고 싶다면:
 
 ```powershell
-python -m pip install -e ".[dev]"
+uv sync --all-extras
 python -m pytest tests -q
+ruff check forensic_claw tests
 ```
 
 현재 정리 이후 기준 로컬 결과:
 
 ```text
-401 passed
+452 passed
+ruff check clean
 ```
 
 ## 빠른 시작 요약
@@ -492,6 +517,7 @@ forensic-claw onboard
 forensic-claw gateway
 forensic-claw agent
 forensic-claw status
+forensic-claw plugins list
 forensic-claw channels status
 forensic-claw channels login discord
 forensic-claw channels login kakaotalk

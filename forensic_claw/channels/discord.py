@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from pydantic import Field
 import websockets
 from loguru import logger
+from pydantic import Field
 
 from forensic_claw.bus.events import OutboundMessage
 from forensic_claw.bus.queue import MessageBus

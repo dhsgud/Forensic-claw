@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import datetime, timezone
-import re
 from typing import Any
 from zoneinfo import ZoneInfo
 

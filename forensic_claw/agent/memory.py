@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from forensic_claw.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from forensic_claw.utils.helpers import (
+    ensure_dir,
+    estimate_message_tokens,
+    estimate_prompt_tokens_chain,
+)
 
 if TYPE_CHECKING:
     from forensic_claw.providers.base import LLMProvider

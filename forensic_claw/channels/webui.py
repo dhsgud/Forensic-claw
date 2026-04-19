@@ -22,7 +22,11 @@ from forensic_claw.command import get_builtin_command_specs
 from forensic_claw.config.schema import Base
 from forensic_claw.session.manager import Session, SessionManager
 from forensic_claw.session.scopes import build_scoped_session_key, parse_scoped_session_key
-from forensic_claw.utils.helpers import current_time_str, extract_message_thinking_text, safe_filename
+from forensic_claw.utils.helpers import (
+    current_time_str,
+    extract_message_thinking_text,
+    safe_filename,
+)
 
 
 class WebUIConfig(Base):

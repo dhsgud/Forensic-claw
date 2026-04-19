@@ -6,7 +6,6 @@ from forensic_claw.utils.event_logs import (
     parse_windows_event_blocks,
 )
 
-
 RAW_EVENTS = """Event[0]
   Log Name: System
   Source: EventLog
