@@ -135,6 +135,7 @@ class ExecToolConfig(Base):
     enable: bool = True
     timeout: int = 60
     path_append: str = ""
+    elevate_on_windows: bool = True
 
 
 class MCPServerConfig(Base):

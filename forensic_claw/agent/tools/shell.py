@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import ctypes
 import locale
 import os
 import re
@@ -36,6 +37,7 @@ class ExecTool(Tool):
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
+        elevate_on_windows: bool = True,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
@@ -53,6 +55,7 @@ class ExecTool(Tool):
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
+        self.elevate_on_windows = elevate_on_windows
 
     @property
     def name(self) -> str:
@@ -148,6 +151,9 @@ class ExecTool(Tool):
 
         if sys.platform == "win32":
             shell_exe = self._preferred_windows_shell()
+            wrapper = "PowerShell wrapper enables UTF-8 console I/O before running the command."
+            if self.elevate_on_windows:
+                wrapper += " On Windows, commands relaunch into an elevated PowerShell session when needed."
             return {
                 "command": command,
                 "workingDir": cwd,
@@ -155,11 +161,12 @@ class ExecTool(Tool):
                 "platform": "windows",
                 "shell": Path(shell_exe).name or shell_exe,
                 "shellPath": shell_exe,
+                "elevated": self.elevate_on_windows,
                 "launcher": (
                     f"{shell_exe} -NoLogo -NoProfile -NonInteractive "
                     "-ExecutionPolicy Bypass -EncodedCommand <base64>"
                 ),
-                "wrapper": "PowerShell wrapper enables UTF-8 console I/O before running the command.",
+                "wrapper": wrapper,
             }
 
         shell_exe = os.environ.get("SHELL") or "/bin/sh"
@@ -197,8 +204,11 @@ class ExecTool(Tool):
     ) -> asyncio.subprocess.Process:
         if sys.platform == "win32":
             shell_exe = self._preferred_windows_shell()
+            wrapped_command = self._wrap_windows_command(command)
+            if self.elevate_on_windows and not self._is_windows_admin():
+                wrapped_command = self._wrap_windows_elevated_command(shell_exe, command)
             encoded_script = base64.b64encode(
-                self._wrap_windows_command(command).encode("utf-16-le")
+                wrapped_command.encode("utf-16-le")
             ).decode("ascii")
             return await asyncio.create_subprocess_exec(
                 shell_exe,
@@ -347,6 +357,98 @@ class ExecTool(Tool):
             "$OutputEncoding = [Console]::OutputEncoding\n"
             f"{command}\n"
         )
+
+    @classmethod
+    def _wrap_windows_elevated_command(cls, shell_exe: str, command: str) -> str:
+        command_base64 = base64.b64encode(command.encode("utf-8")).decode("ascii")
+        shell_literal = cls._powershell_single_quote(shell_exe)
+        return (
+            "$ErrorActionPreference = 'Continue'\n"
+            "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "$OutputEncoding = [Console]::OutputEncoding\n"
+            "$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "
+            "('forensic-claw-exec-' + [guid]::NewGuid().ToString())\n"
+            "New-Item -ItemType Directory -Path $tempDir -Force | Out-Null\n"
+            "$stdoutPath = Join-Path $tempDir 'stdout.txt'\n"
+            "$stderrPath = Join-Path $tempDir 'stderr.txt'\n"
+            "$exitPath = Join-Path $tempDir 'exit.txt'\n"
+            "$runnerPath = Join-Path $tempDir 'runner.ps1'\n"
+            "$stdoutLiteral = \"'\" + $stdoutPath.Replace(\"'\", \"''\") + \"'\"\n"
+            "$stderrLiteral = \"'\" + $stderrPath.Replace(\"'\", \"''\") + \"'\"\n"
+            "$exitLiteral = \"'\" + $exitPath.Replace(\"'\", \"''\") + \"'\"\n"
+            "$runnerTemplate = @'\n"
+            "$ErrorActionPreference = 'Continue'\n"
+            "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "$OutputEncoding = [Console]::OutputEncoding\n"
+            "$commandText = [System.Text.Encoding]::UTF8.GetString("
+            "[Convert]::FromBase64String('__CMD_BASE64__'))\n"
+            "try {\n"
+            "    & ([scriptblock]::Create($commandText)) 1> __STDOUT__ 2> __STDERR__\n"
+            "    if ($LASTEXITCODE -is [int]) { $childExitCode = $LASTEXITCODE }\n"
+            "    elseif ($?) { $childExitCode = 0 } else { $childExitCode = 1 }\n"
+            "} catch {\n"
+            "    $_ | Out-String | Add-Content -LiteralPath __STDERR__ -Encoding utf8\n"
+            "    $childExitCode = 1\n"
+            "}\n"
+            "Set-Content -LiteralPath __EXIT__ -Value $childExitCode -Encoding ascii\n"
+            "exit $childExitCode\n"
+            "'@\n"
+            "$runnerScript = $runnerTemplate"
+            f".Replace('__CMD_BASE64__', '{command_base64}')"
+            ".Replace('__STDOUT__', $stdoutLiteral)"
+            ".Replace('__STDERR__', $stderrLiteral)"
+            ".Replace('__EXIT__', $exitLiteral)\n"
+            "Set-Content -LiteralPath $runnerPath -Value $runnerScript -Encoding utf8\n"
+            "try {\n"
+            f"    $proc = Start-Process -FilePath {shell_literal} "
+            "-ArgumentList @("
+            "'-NoLogo',"
+            "'-NoProfile',"
+            "'-NonInteractive',"
+            "'-ExecutionPolicy',"
+            "'Bypass',"
+            "'-File',"
+            "$runnerPath"
+            ") -Verb RunAs -Wait -PassThru -WindowStyle Hidden\n"
+            "    if (Test-Path -LiteralPath $exitPath) {\n"
+            "        $outerExitCode = [int](Get-Content -LiteralPath $exitPath -Raw)\n"
+            "    } else {\n"
+            "        $outerExitCode = $proc.ExitCode\n"
+            "    }\n"
+            "} catch {\n"
+            "    $_ | Out-String | Write-Error\n"
+            "    $outerExitCode = 1\n"
+            "}\n"
+            "if (Test-Path -LiteralPath $stdoutPath) {\n"
+            "    $stdoutText = Get-Content -LiteralPath $stdoutPath -Raw\n"
+            "    if ($null -ne $stdoutText -and $stdoutText.Length -gt 0) {\n"
+            "        [Console]::Out.Write($stdoutText)\n"
+            "    }\n"
+            "}\n"
+            "if (Test-Path -LiteralPath $stderrPath) {\n"
+            "    $stderrText = Get-Content -LiteralPath $stderrPath -Raw\n"
+            "    if ($null -ne $stderrText -and $stderrText.Length -gt 0) {\n"
+            "        [Console]::Error.Write($stderrText)\n"
+            "    }\n"
+            "}\n"
+            "Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue\n"
+            "exit $outerExitCode\n"
+        )
+
+    @staticmethod
+    def _powershell_single_quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    @staticmethod
+    def _is_windows_admin() -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
 
     @staticmethod
     def _windows_creationflags() -> int:

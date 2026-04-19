@@ -1,3 +1,4 @@
+import base64
 from typing import Any
 
 from forensic_claw.agent.tools.base import Tool
@@ -123,13 +124,13 @@ def test_exec_extract_absolute_paths_captures_quoted_paths() -> None:
 
 
 def test_exec_guard_blocks_home_path_outside_workspace(tmp_path) -> None:
-    tool = ExecTool(restrict_to_workspace=True)
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
     error = tool._guard_command("cat ~/.forensic-claw/config.json", str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
 def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
-    tool = ExecTool(restrict_to_workspace=True)
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
     error = tool._guard_command('cat "~/.forensic-claw/config.json"', str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
@@ -370,7 +371,7 @@ def test_cast_params_single_value_not_auto_wrapped_to_array() -> None:
 
 async def test_exec_always_returns_exit_code() -> None:
     """Exit code should appear in output even on success (exit 0)."""
-    tool = ExecTool()
+    tool = ExecTool(elevate_on_windows=False)
     result = await tool.execute(command="echo hello")
     assert "Exit code: 0" in result
     assert "hello" in result
@@ -378,7 +379,7 @@ async def test_exec_always_returns_exit_code() -> None:
 
 async def test_exec_head_tail_truncation() -> None:
     """Long output should preserve both head and tail."""
-    tool = ExecTool()
+    tool = ExecTool(elevate_on_windows=False)
     # Generate output that exceeds _MAX_OUTPUT (10_000 chars)
     # Use python to generate output to avoid command line length limits
     result = await tool.execute(
@@ -393,7 +394,7 @@ async def test_exec_head_tail_truncation() -> None:
 
 async def test_exec_timeout_parameter() -> None:
     """LLM-supplied timeout should override the constructor default."""
-    tool = ExecTool(timeout=60)
+    tool = ExecTool(timeout=60, elevate_on_windows=False)
     # A very short timeout should cause the command to be killed
     result = await tool.execute(command='python -c "import time; time.sleep(10)"', timeout=1)
     assert "timed out" in result
@@ -402,7 +403,7 @@ async def test_exec_timeout_parameter() -> None:
 
 async def test_exec_timeout_capped_at_max() -> None:
     """Timeout values above _MAX_TIMEOUT should be clamped."""
-    tool = ExecTool()
+    tool = ExecTool(elevate_on_windows=False)
     # Should not raise — just clamp to 600
     result = await tool.execute(command="echo ok", timeout=9999)
     assert "Exit code: 0" in result
@@ -410,12 +411,46 @@ async def test_exec_timeout_capped_at_max() -> None:
 
 async def test_exec_decodes_cp949_stdout() -> None:
     """ExecTool should decode common Windows encodings like CP949."""
-    tool = ExecTool()
+    tool = ExecTool(elevate_on_windows=False)
     result = await tool.execute(
         command='python -c "import sys; sys.stdout.buffer.write(\'안녕\'.encode(\'cp949\'))"'
     )
     assert "안녕" in result
     assert "Exit code: 0" in result
+
+
+async def test_exec_wraps_windows_commands_with_runas_when_elevation_is_enabled(
+    monkeypatch,
+) -> None:
+    """Windows exec should relaunch through Start-Process -Verb RunAs when configured."""
+    tool = ExecTool(elevate_on_windows=True)
+    captured: dict[str, str] = {}
+
+    class _DummyProcess:
+        pid = 1234
+        returncode = 0
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["shell"] = args[0]
+        encoded_index = args.index("-EncodedCommand") + 1
+        captured["script"] = base64.b64decode(args[encoded_index]).decode("utf-16-le")
+        return _DummyProcess()
+
+    monkeypatch.setattr("forensic_claw.agent.tools.shell.sys.platform", "win32")
+    monkeypatch.setattr(tool, "_is_windows_admin", lambda: False)
+    monkeypatch.setattr(tool, "_preferred_windows_shell", lambda: "powershell.exe")
+    monkeypatch.setattr(
+        "forensic_claw.agent.tools.shell.asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    await tool._spawn_process("Write-Output 'hello'", "C:\\", {})
+
+    assert captured["shell"] == "powershell.exe"
+    assert "Start-Process -FilePath 'powershell.exe'" in captured["script"]
+    assert "-Verb RunAs" in captured["script"]
+    assert "Write-Output 'hello'" not in captured["script"]
+    assert "FromBase64String" in captured["script"]
 
 
 # --- _resolve_type and nullable param tests ---

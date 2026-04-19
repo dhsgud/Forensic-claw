@@ -65,6 +65,7 @@ allow-direct-references = true
 [tool.hatch.build]
 include = [
     "forensic_claw/**/*.py",
+    "forensic_claw/forensic-tool/**/*",
     "forensic_claw/webui/**/*.html",
     "forensic_claw/webui/**/*.css",
     "forensic_claw/webui/**/*.js",
@@ -93,6 +94,9 @@ packages = ["forensic_claw"]
 "forensic_claw/skills/memory/SKILL.md" = "forensic_claw/skills/memory/SKILL.md"
 "forensic_claw/skills/skill-creator/SKILL.md" = "forensic_claw/skills/skill-creator/SKILL.md"
 "forensic_claw/skills/summarize/SKILL.md" = "forensic_claw/skills/summarize/SKILL.md"
+"forensic_claw/forensic-tool/PECmd/PECmd.dll" = "forensic_claw/forensic-tool/PECmd/PECmd.dll"
+"forensic_claw/forensic-tool/PECmd/PECmd.exe" = "forensic_claw/forensic-tool/PECmd/PECmd.exe"
+"forensic_claw/forensic-tool/PECmd/PECmd.runtimeconfig.json" = "forensic_claw/forensic-tool/PECmd/PECmd.runtimeconfig.json"
 
 [tool.hatch.build.targets.wheel.sources]
 "forensic_claw" = "forensic_claw"

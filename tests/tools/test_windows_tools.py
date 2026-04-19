@@ -17,7 +17,10 @@ from forensic_claw.forensics import CaseStore
 
 
 @pytest.mark.asyncio
-async def test_windows_tools_execute_and_update_case_store(tmp_path: Path) -> None:
+async def test_windows_tools_execute_and_update_case_store(
+    tmp_path: Path,
+    prefetch_pecmd_runner,
+) -> None:
     fixtures_root = Path(__file__).resolve().parents[1] / "fixtures" / "windows"
     eventlog_text = (fixtures_root / "evtx" / "security_4688.txt").read_text(encoding="utf-8")
     prefetch_path = fixtures_root / "prefetch" / "CALC.EXE-TEST.pf"
@@ -31,7 +34,7 @@ async def test_windows_tools_execute_and_update_case_store(tmp_path: Path) -> No
         return eventlog_text
 
     eventlog_tool = WindowsEventLogQueryTool(workspace=tmp_path, query_runner=fake_runner)
-    prefetch_tool = WindowsPrefetchAnalyzeTool(workspace=tmp_path)
+    prefetch_tool = WindowsPrefetchAnalyzeTool(workspace=tmp_path, runner=prefetch_pecmd_runner)
     amcache_tool = WindowsAmcacheAnalyzeTool(workspace=tmp_path)
     timeline_tool = WindowsTimelineBuildTool(workspace=tmp_path)
 

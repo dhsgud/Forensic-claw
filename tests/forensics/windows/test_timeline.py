@@ -9,7 +9,10 @@ from forensic_claw.forensics.windows.prefetch import analyze_prefetch_artifact
 from forensic_claw.forensics.windows.timeline import build_windows_timeline
 
 
-def test_builds_merged_windows_timeline_from_eventlog_prefetch_and_amcache(tmp_path: Path) -> None:
+def test_builds_merged_windows_timeline_from_eventlog_prefetch_and_amcache(
+    tmp_path: Path,
+    prefetch_pecmd_runner,
+) -> None:
     fixtures_root = Path(__file__).resolve().parents[2] / "fixtures" / "windows"
     eventlog_text = (fixtures_root / "evtx" / "security_4688.txt").read_text(encoding="utf-8")
     prefetch_path = fixtures_root / "prefetch" / "CALC.EXE-TEST.pf"
@@ -20,7 +23,12 @@ def test_builds_merged_windows_timeline_from_eventlog_prefetch_and_amcache(tmp_p
     ingest_eventlog_query_output(
         store, case_id=case.id, log_name="Security", query_output=eventlog_text
     )
-    analyze_prefetch_artifact(store, case_id=case.id, prefetch_path=prefetch_path)
+    analyze_prefetch_artifact(
+        store,
+        case_id=case.id,
+        prefetch_path=prefetch_path,
+        runner=prefetch_pecmd_runner,
+    )
     analyze_amcache_artifact(store, case_id=case.id, hive_path=amcache_path)
 
     result = build_windows_timeline(store, case_id=case.id, merge_strategy="chronological")

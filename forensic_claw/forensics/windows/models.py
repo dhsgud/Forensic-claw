@@ -34,6 +34,13 @@ class PrefetchArtifact:
     run_count: int | None = None
     last_run_times: list[str] = field(default_factory=list)
     referenced_files: list[str] = field(default_factory=list)
+    directories: list[str] = field(default_factory=list)
+    prefetch_hash: str | None = None
+    version: str | None = None
+    source_filename: str | None = None
+    layout_ini_path: str | None = None
+    layout_prefetch_entries: list[str] = field(default_factory=list)
+    layout_prefetch_entry_count: int = 0
 
 
 @dataclass(frozen=True)

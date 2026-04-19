@@ -23,7 +23,7 @@ class _DummyProcess:
 
 @pytest.mark.asyncio
 async def test_exec_compacts_windows_event_log_output(monkeypatch) -> None:
-    tool = ExecTool(timeout=5)
+    tool = ExecTool(timeout=5, elevate_on_windows=False)
 
     async def fake_spawn(command, cwd, env):
         return _DummyProcess()

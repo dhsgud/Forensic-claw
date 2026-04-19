@@ -13,7 +13,7 @@ from forensic_claw.forensics.windows.eventlog import (
     ingest_eventlog_query_output,
     run_windows_eventlog_query,
 )
-from forensic_claw.forensics.windows.prefetch import analyze_prefetch_artifact
+from forensic_claw.forensics.windows.prefetch import PECmdRunner, analyze_prefetch_artifact
 from forensic_claw.forensics.windows.timeline import build_windows_timeline
 
 
@@ -101,6 +101,10 @@ class WindowsEventLogQueryTool(_WindowsTool):
 
 
 class WindowsPrefetchAnalyzeTool(_WindowsTool):
+    def __init__(self, workspace: Path, runner: PECmdRunner | None = None):
+        super().__init__(workspace)
+        self._runner = runner
+
     @property
     def name(self) -> str:
         return "windows_prefetch_analyze"
@@ -116,6 +120,10 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
             "properties": {
                 "case_id": {"type": "string", "description": "Target forensic case id"},
                 "prefetch_path": {"type": "string", "description": "Path to a Prefetch artifact"},
+                "layout_path": {
+                    "type": "string",
+                    "description": "Optional path to Layout.ini for Prefetch listing enrichment",
+                },
                 "source_id": {
                     "type": "string",
                     "description": "Existing source id containing Prefetch raw data",
@@ -128,6 +136,7 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
         self,
         case_id: str,
         prefetch_path: str | None = None,
+        layout_path: str | None = None,
         source_id: str | None = None,
         **kwargs: Any,
     ) -> str:
@@ -135,7 +144,9 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
             self.store,
             case_id=case_id,
             prefetch_path=prefetch_path,
+            layout_path=layout_path,
             source_id=source_id,
+            runner=self._runner,
         )
         return (
             f"Analyzed Prefetch artifact for case {case_id}: "
