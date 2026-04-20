@@ -161,13 +161,105 @@ def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
-def test_exec_guard_prefetch_probe_suggests_dedicated_tool(tmp_path) -> None:
+def test_exec_guard_allows_prefetch_path_outside_workspace_for_forensics(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
     error = tool._guard_command(
         "Get-ChildItem -Path 'C:\\Windows\\Prefetch' -File | Select-Object -First 10 Name",
         str(tmp_path),
     )
-    assert "windows_prefetch_analyze" in (error or "")
+    assert error is None
+
+
+def test_exec_guard_allows_evtx_path_outside_workspace_for_forensics(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-WinEvent -Path 'C:\\Windows\\System32\\winevt\\Logs\\Security.evtx' -MaxEvents 5",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_allows_registry_hive_outside_workspace_for_forensics(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-Item 'C:\\Windows\\System32\\config\\SYSTEM'",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_blocks_nonforensic_destination_outside_workspace_when_copying_hive(
+    tmp_path,
+) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Copy-Item 'C:\\Windows\\System32\\config\\SYSTEM' 'C:\\Temp\\SYSTEM.copy'",
+        str(tmp_path),
+    )
+    assert error == "Error: Command blocked by safety guard (path outside working dir)"
+
+
+def test_exec_guard_allows_srum_path_outside_workspace_for_forensics(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-Item 'C:\\Windows\\System32\\sru\\SRUDB.dat'",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_allows_mft_path_outside_workspace_for_forensics(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-Item 'C:\\$MFT'",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_allows_usn_path_outside_workspace_for_forensics(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-Item 'C:\\$Extend\\$UsnJrnl:$J'",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_allows_shimcache_registry_query(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        r"reg query HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_allows_reg_save_for_core_registry_hives(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        r"reg save HKLM\SYSTEM C:\Temp\SYSTEM.hiv /y",
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_allows_reg_export_for_core_registry_hives(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        r'reg export "HKLM\SOFTWARE" C:\Temp\SOFTWARE.reg /y',
+        str(tmp_path),
+    )
+    assert error is None
+
+
+def test_exec_guard_blocks_reg_export_for_nonforensic_registry_root(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True, elevate_on_windows=False)
+    error = tool._guard_command(
+        r"reg export HKCU\Software C:\Temp\HKCU.reg /y",
+        str(tmp_path),
+    )
+    assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
 # --- cast_params tests ---
@@ -495,6 +587,7 @@ async def test_exec_reuses_windows_broker_after_first_elevation_prompt(
     monkeypatch.setattr(ExecTool, "_windows_broker", None)
     monkeypatch.setattr(ExecTool, "_windows_broker_lock", None)
     monkeypatch.setattr(ExecTool, "_windows_broker_atexit_registered", False)
+    monkeypatch.setattr(ExecTool, "_windows_broker_disabled", False)
 
     first = await tool.execute(command="echo one")
     second = await tool.execute(command="echo two")
@@ -503,6 +596,48 @@ async def test_exec_reuses_windows_broker_after_first_elevation_prompt(
     assert seen_commands == ["echo one", "echo two"]
     assert "echo one" in first
     assert "echo two" in second
+
+
+async def test_exec_falls_back_to_direct_shell_when_windows_broker_fails(monkeypatch) -> None:
+    tool = ExecTool(elevate_on_windows=True)
+    broker_attempts = 0
+
+    class _DummyProcess:
+        pid = 4321
+        returncode = 0
+
+    async def fake_broker(command, cwd, timeout, env):
+        nonlocal broker_attempts
+        broker_attempts += 1
+        raise RuntimeError("broker bootstrap failed")
+
+    async def fake_spawn(command, cwd, env):
+        return _DummyProcess()
+
+    async def fake_collect(process, timeout_s):
+        return b"fallback ok", b"", False
+
+    async def fake_finalize(process):
+        return None
+
+    monkeypatch.setattr("forensic_claw.agent.tools.shell.sys.platform", "win32")
+    monkeypatch.setattr(tool, "_is_windows_admin", lambda: False)
+    monkeypatch.setattr(tool, "_execute_via_windows_broker", fake_broker)
+    monkeypatch.setattr(tool, "_spawn_process", fake_spawn)
+    monkeypatch.setattr(tool, "_collect_output", fake_collect)
+    monkeypatch.setattr(tool, "_finalize_process", fake_finalize)
+    monkeypatch.setattr(ExecTool, "_windows_broker", None)
+    monkeypatch.setattr(ExecTool, "_windows_broker_lock", None)
+    monkeypatch.setattr(ExecTool, "_windows_broker_atexit_registered", False)
+    monkeypatch.setattr(ExecTool, "_windows_broker_disabled", False)
+
+    first = await tool.execute(command="Write-Output 'fallback ok'")
+    second = await tool.execute(command="Write-Output 'fallback ok'")
+
+    assert broker_attempts == 1
+    assert "fallback ok" in first
+    assert "ran without elevation" in first
+    assert "fallback ok" in second
 
 
 def test_exec_broker_launcher_uses_runas_once_for_bootstrap(tmp_path: Path) -> None:

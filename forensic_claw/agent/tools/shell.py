@@ -51,6 +51,35 @@ class ExecTool(Tool):
     _windows_broker: ClassVar[_WindowsElevatedBrokerSession | None] = None
     _windows_broker_lock: ClassVar[asyncio.Lock | None] = None
     _windows_broker_atexit_registered: ClassVar[bool] = False
+    _windows_broker_disabled: ClassVar[bool] = False
+    _WINDOWS_CONFIG_HIVE_BASENAMES: ClassVar[set[str]] = {
+        "components",
+        "default",
+        "drivers",
+        "sam",
+        "security",
+        "software",
+        "system",
+    }
+    _PORTABLE_HIVE_BASENAMES: ClassVar[set[str]] = {
+        "amcache.hve",
+        "ntuser.dat",
+        "usrclass.dat",
+    }
+    _FORENSIC_REGISTRY_ROOTS: ClassVar[tuple[str, ...]] = (
+        r"hklm\sam",
+        r"hkey_local_machine\sam",
+        r"hklm\security",
+        r"hkey_local_machine\security",
+        r"hklm\software",
+        r"hkey_local_machine\software",
+        r"hklm\system",
+        r"hkey_local_machine\system",
+    )
+    _NTFS_METADATA_BASENAMES: ClassVar[set[str]] = {
+        "$mft",
+        "$usnjrnl:$j",
+    }
 
     def __init__(
         self,
@@ -132,24 +161,38 @@ class ExecTool(Tool):
 
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
         env = self._build_env()
+        broker_fallback_note: str | None = None
 
         try:
             if self._should_use_windows_elevated_broker():
-                stdout, stderr, exit_code, timed_out = await self._execute_via_windows_broker(
-                    command,
-                    cwd,
-                    effective_timeout,
-                    env,
-                )
-                if timed_out:
-                    return f"Error: Command timed out after {effective_timeout} seconds"
-                return self._format_command_result(stdout, stderr, exit_code)
+                try:
+                    stdout, stderr, exit_code, timed_out = await self._execute_via_windows_broker(
+                        command,
+                        cwd,
+                        effective_timeout,
+                        env,
+                    )
+                except Exception as e:
+                    self._disable_windows_broker()
+                    logger.warning(
+                        "Windows elevated broker unavailable, falling back to direct execution: {}",
+                        e,
+                    )
+                    broker_fallback_note = (
+                        f"Note: Windows elevation broker unavailable ({e}). "
+                        "The command ran without elevation.\n\n"
+                    )
+                else:
+                    if timed_out:
+                        return f"Error: Command timed out after {effective_timeout} seconds"
+                    return self._format_command_result(stdout, stderr, exit_code)
 
             process = await self._spawn_process(command, cwd, env)
             stdout, stderr, timed_out = await self._collect_output(process, effective_timeout)
             if timed_out:
                 return f"Error: Command timed out after {effective_timeout} seconds"
-            return self._format_command_result(stdout, stderr, process.returncode)
+            result = self._format_command_result(stdout, stderr, process.returncode)
+            return f"{broker_fallback_note}{result}" if broker_fallback_note else result
         except Exception as e:
             return f"Error executing command: {e}"
 
@@ -168,8 +211,11 @@ class ExecTool(Tool):
         if sys.platform == "win32":
             shell_exe = self._preferred_windows_shell()
             wrapper = "PowerShell wrapper enables UTF-8 console I/O before running the command."
-            if self.elevate_on_windows:
+            elevated = self.elevate_on_windows and not self.__class__._windows_broker_disabled
+            if elevated:
                 wrapper += " On Windows, commands bootstrap one elevated broker session and reuse it for later commands."
+            elif self.elevate_on_windows:
+                wrapper += " Elevated broker is disabled for this process after a startup failure, so commands run without elevation."
             return {
                 "command": command,
                 "workingDir": cwd,
@@ -177,7 +223,7 @@ class ExecTool(Tool):
                 "platform": "windows",
                 "shell": Path(shell_exe).name or shell_exe,
                 "shellPath": shell_exe,
-                "elevated": self.elevate_on_windows,
+                "elevated": elevated,
                 "launcher": (
                     f"{shell_exe} -NoLogo -NoProfile -NonInteractive "
                     "-ExecutionPolicy Bypass -EncodedCommand <base64>"
@@ -229,7 +275,12 @@ class ExecTool(Tool):
         return result
 
     def _should_use_windows_elevated_broker(self) -> bool:
-        return sys.platform == "win32" and self.elevate_on_windows and not self._is_windows_admin()
+        return (
+            sys.platform == "win32"
+            and self.elevate_on_windows
+            and not self.__class__._windows_broker_disabled
+            and not self._is_windows_admin()
+        )
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -769,6 +820,11 @@ while ($true) {
         cls._shutdown_windows_broker_session(broker)
         cls._windows_broker = None
 
+    @classmethod
+    def _disable_windows_broker(cls) -> None:
+        cls._shutdown_shared_windows_broker()
+        cls._windows_broker_disabled = True
+
     @staticmethod
     def _shutdown_windows_broker_session(broker: _WindowsElevatedBrokerSession) -> None:
         try:
@@ -824,27 +880,86 @@ while ($true) {
                 return "Error: Command blocked by safety guard (path traversal detected)"
 
             cwd_path = Path(cwd).resolve()
+            outside_paths: list[Path] = []
             for raw in self._extract_absolute_paths(cmd):
+                if self._looks_like_windows_switch_token(raw, cmd):
+                    continue
                 try:
                     expanded = os.path.expandvars(raw.strip())
                     p = Path(expanded).expanduser().resolve()
                 except Exception:
                     continue
                 if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
-                    if self._looks_like_windows_prefetch_probe(cmd):
-                        return (
-                            "Error: Command blocked by safety guard (path outside working dir). "
-                            "For Windows Prefetch artifacts, use the windows_prefetch_analyze tool "
-                            "instead of exec."
-                        )
-                    return "Error: Command blocked by safety guard (path outside working dir)"
+                    outside_paths.append(p)
+
+            for path in outside_paths:
+                if self._is_allowed_forensic_path(path):
+                    continue
+                if self._is_allowed_forensic_registry_export(cmd, path, outside_paths):
+                    continue
+                return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
 
     @staticmethod
-    def _looks_like_windows_prefetch_probe(command: str) -> bool:
-        lowered = command.lower()
-        return "\\windows\\prefetch" in lowered or "layout.ini" in lowered
+    def _is_allowed_forensic_path(path: Path) -> bool:
+        normalized = str(path).replace("/", "\\").lower()
+        basename = path.name.lower()
+
+        if basename == "layout.ini" or path.suffix.lower() in {".evtx", ".pf"}:
+            return True
+        if basename in ExecTool._PORTABLE_HIVE_BASENAMES:
+            return True
+        if basename in ExecTool._NTFS_METADATA_BASENAMES:
+            return True
+        if "\\windows\\prefetch" in normalized:
+            return True
+        if "\\windows\\system32\\winevt\\logs\\" in normalized:
+            return True
+        if "\\windows\\system32\\sru\\" in normalized and basename == "srudb.dat":
+            return True
+        if (
+            "\\windows\\system32\\config\\" in normalized
+            and basename in ExecTool._WINDOWS_CONFIG_HIVE_BASENAMES
+        ):
+            return True
+        return False
+
+    @classmethod
+    def _is_allowed_forensic_registry_export(
+        cls,
+        command: str,
+        path: Path,
+        outside_paths: list[Path],
+    ) -> bool:
+        if len(outside_paths) != 1 or outside_paths[0] != path:
+            return False
+
+        match = re.search(
+            r"""(?ix)
+            \breg(?:\.exe)?\s+
+            (?P<verb>save|export)\s+
+            (?P<key>"[^"]+"|'[^']+'|\S+)
+            """,
+            command,
+        )
+        if not match:
+            return False
+
+        key = match.group("key").strip().strip("\"'")
+        normalized_key = key.replace("/", "\\").lower()
+        return any(
+            normalized_key == root or normalized_key.startswith(root + "\\")
+            for root in cls._FORENSIC_REGISTRY_ROOTS
+        )
+
+    @staticmethod
+    def _looks_like_windows_switch_token(token: str, command: str) -> bool:
+        return (
+            token.startswith("/")
+            and "\\" in command
+            and re.fullmatch(r"/[A-Za-z0-9?][A-Za-z0-9:-]*", token) is not None
+        )
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

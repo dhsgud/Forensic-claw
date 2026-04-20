@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable
@@ -15,6 +17,7 @@ from forensic_claw.forensics.windows.models import ArtifactUpdateResult, Prefetc
 
 PECmdRunner = Callable[..., str]
 _LAYOUT_ENCODINGS = ("utf-8-sig", "utf-16", "utf-8", "cp949")
+_PECMD_OUTPUT_ENCODINGS = ("utf-8-sig", "utf-8", "cp949")
 
 
 def _load_text_payload(path: Path) -> str:
@@ -35,6 +38,41 @@ def _bundled_pecmd_candidates() -> list[Path]:
         project_root / "Forensics-tool" / "PECmd" / "PECmd.exe",
         project_root / "forensic-tool" / "PECmd" / "PECmd.exe",
     ]
+
+
+def _bundled_dotnet_root_candidates() -> list[Path]:
+    package_root = Path(__file__).resolve().parents[2]
+    project_root = package_root.parent
+    return [
+        package_root / "forensic-tool" / "dotnet" / "win-x64",
+        package_root / "forensic-tool" / "dotnet",
+        project_root / "Forensics-tool" / "dotnet" / "win-x64",
+        project_root / "Forensics-tool" / "dotnet",
+        project_root / "forensic-tool" / "dotnet" / "win-x64",
+        project_root / "forensic-tool" / "dotnet",
+    ]
+
+
+def _resolve_dotnet_root() -> Path | None:
+    configured_root = os.environ.get("FORENSIC_CLAW_DOTNET_ROOT")
+    if configured_root:
+        candidate = Path(configured_root).expanduser()
+        if (candidate / "dotnet.exe").is_file():
+            return candidate
+
+    configured_dotnet = os.environ.get("FORENSIC_CLAW_DOTNET_PATH")
+    if configured_dotnet:
+        candidate = Path(configured_dotnet).expanduser()
+        if candidate.is_file():
+            return candidate.parent
+
+    for candidate in _bundled_dotnet_root_candidates():
+        if (candidate / "dotnet.exe").is_file():
+            return candidate
+
+    if resolved := shutil.which("dotnet"):
+        return Path(resolved).resolve().parent
+    return None
 
 
 def _resolve_pecmd_executable() -> str:
@@ -75,6 +113,13 @@ def _pecmd_runtime_requirement(pecmd_path: str | Path) -> str | None:
     return f"{name} {version}"
 
 
+def _pecmd_runtime_install_hint() -> str:
+    return (
+        " Bundle a portable runtime under forensic_claw/forensic-tool/dotnet/win-x64 "
+        "or set FORENSIC_CLAW_DOTNET_ROOT / FORENSIC_CLAW_DOTNET_PATH."
+    )
+
+
 def _build_pecmd_failure_detail(
     prefetch_path: Path,
     pecmd_path: str | Path,
@@ -87,9 +132,138 @@ def _build_pecmd_failure_detail(
         suffix = f" Required runtime: {runtime_requirement}." if runtime_requirement else ""
         return (
             f"PECmd failed for {prefetch_path}: missing .NET runtime or framework dependency."
-            f"{suffix} Original error: {detail}"
+            f"{suffix}{_pecmd_runtime_install_hint()} Original error: {detail}"
         )
     return f"PECmd failed for {prefetch_path}: {detail}"
+
+
+def _decode_pecmd_output(data: bytes) -> str:
+    for encoding in _PECMD_OUTPUT_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _build_pecmd_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("DOTNET_ROLL_FORWARD", "Major")
+
+    dotnet_root = _resolve_dotnet_root()
+    if dotnet_root is not None:
+        env.setdefault("DOTNET_ROOT", str(dotnet_root))
+        env.setdefault("DOTNET_MULTILEVEL_LOOKUP", "0")
+    return env
+
+
+def _run_pecmd_via_windows_wrapper(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    shell_exe = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+    with TemporaryDirectory(prefix="forensic-claw-pecmd-logs-") as tmp_dir:
+        stdout_path = Path(tmp_dir) / "stdout.bin"
+        stderr_path = Path(tmp_dir) / "stderr.bin"
+        payload = {
+            "filePath": command[0],
+            "arguments": command[1:],
+            "workingDir": str(cwd),
+            "stdoutPath": str(stdout_path),
+            "stderrPath": str(stderr_path),
+        }
+        encoded_payload = base64.b64encode(
+            json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        ).decode("ascii")
+        launcher_script = (
+            "$ErrorActionPreference = 'Stop'\n"
+            "$ProgressPreference = 'SilentlyContinue'\n"
+            f"$payloadJson = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_payload}'))\n"
+            "$payload = $payloadJson | ConvertFrom-Json\n"
+            "$proc = Start-Process "
+            "-FilePath ([string]$payload.filePath) "
+            "-ArgumentList @($payload.arguments) "
+            "-WorkingDirectory ([string]$payload.workingDir) "
+            "-PassThru -Wait -WindowStyle Hidden "
+            "-RedirectStandardOutput ([string]$payload.stdoutPath) "
+            "-RedirectStandardError ([string]$payload.stderrPath)\n"
+            "[byte[]]$stdoutBytes = @()\n"
+            "if (Test-Path -LiteralPath $payload.stdoutPath) { "
+            "$stdoutBytes = [System.IO.File]::ReadAllBytes([string]$payload.stdoutPath) }\n"
+            "[byte[]]$stderrBytes = @()\n"
+            "if (Test-Path -LiteralPath $payload.stderrPath) { "
+            "$stderrBytes = [System.IO.File]::ReadAllBytes([string]$payload.stderrPath) }\n"
+            "$response = @{\n"
+            "  exitCode = $proc.ExitCode\n"
+            "  stdoutBase64 = [Convert]::ToBase64String($stdoutBytes)\n"
+            "  stderrBase64 = [Convert]::ToBase64String($stderrBytes)\n"
+            "}\n"
+            "$response | ConvertTo-Json -Compress\n"
+        )
+        encoded_script = base64.b64encode(launcher_script.encode("utf-16-le")).decode("ascii")
+        wrapper = subprocess.run(
+            [
+                shell_exe,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+                encoded_script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            cwd=str(cwd),
+            env=env,
+        )
+        if wrapper.returncode != 0:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=wrapper.returncode,
+                stdout=wrapper.stdout,
+                stderr=wrapper.stderr,
+            )
+
+        try:
+            response = json.loads(wrapper.stdout.strip())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"PECmd wrapper did not return valid JSON: {wrapper.stdout.strip() or wrapper.stderr.strip()}"
+            ) from exc
+
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=int(response.get("exitCode", 1)),
+            stdout=_decode_pecmd_output(base64.b64decode(response.get("stdoutBase64", "") or "")),
+            stderr=_decode_pecmd_output(base64.b64decode(response.get("stderrBase64", "") or "")),
+        )
+
+
+def _run_pecmd_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    if sys.platform == "win32":
+        return _run_pecmd_via_windows_wrapper(command, cwd=cwd, env=env)
+
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        cwd=str(cwd),
+        env=env,
+    )
 
 
 def run_pecmd_prefetch(
@@ -100,6 +274,7 @@ def run_pecmd_prefetch(
     if runner is not None:
         return str(runner(prefetch_path=prefetch_path))
 
+    resolved_prefetch_path = prefetch_path.resolve(strict=False)
     pecmd = _resolve_pecmd_executable()
     with TemporaryDirectory(prefix="forensic-claw-pecmd-") as tmp_dir:
         output_dir = Path(tmp_dir)
@@ -107,7 +282,7 @@ def run_pecmd_prefetch(
         command = [
             pecmd,
             "-f",
-            str(prefetch_path),
+            str(resolved_prefetch_path),
             "--json",
             str(output_dir),
             "--jsonf",
@@ -116,20 +291,20 @@ def run_pecmd_prefetch(
             "o",
             "-q",
         ]
-        completed = subprocess.run(
+        completed = _run_pecmd_process(
             command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+            cwd=resolved_prefetch_path.parent,
+            env=_build_pecmd_env(),
         )
         if completed.returncode != 0:
             raise RuntimeError(_build_pecmd_failure_detail(prefetch_path, pecmd, completed))
 
         output_path = output_dir / output_name
         if not output_path.is_file():
-            raise FileNotFoundError(f"PECmd did not create JSON output for {prefetch_path}")
+            detail = completed.stderr.strip() or completed.stdout.strip() or "no diagnostic output"
+            raise FileNotFoundError(
+                f"PECmd did not create JSON output for {prefetch_path}. Output: {detail}"
+            )
         return output_path.read_text(encoding="utf-8", errors="replace")
 
 
