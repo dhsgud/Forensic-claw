@@ -1,8 +1,12 @@
 import asyncio
 import base64
 import json
+import shutil
+import sys
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from forensic_claw.agent.tools.base import Tool
 from forensic_claw.agent.tools.registry import ToolRegistry
@@ -260,6 +264,15 @@ def test_exec_guard_blocks_reg_export_for_nonforensic_registry_root(tmp_path) ->
         str(tmp_path),
     )
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
+
+
+def test_exec_guard_allows_powershell_format_table(tmp_path) -> None:
+    tool = ExecTool(elevate_on_windows=False)
+    error = tool._guard_command(
+        "Get-ChildItem 'C:\\Windows\\Prefetch' | Format-Table Name, LastWriteTime -AutoSize",
+        str(tmp_path),
+    )
+    assert error is None
 
 
 # --- cast_params tests ---
@@ -703,6 +716,76 @@ async def test_exec_reads_broker_response_with_utf8_bom(tmp_path: Path) -> None:
     assert stderr == b""
     assert exit_code == 0
     assert timed_out is False
+
+
+async def test_exec_windows_broker_handles_empty_stdout_and_stderr(tmp_path: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows-only broker script test")
+
+    shell_exe = shutil.which("pwsh") or shutil.which("powershell")
+    if shell_exe is None:
+        pytest.skip("PowerShell not available")
+
+    tool = ExecTool(elevate_on_windows=True)
+    session_dir = tmp_path / "broker-live"
+    session_dir.mkdir()
+    broker_script_path = session_dir / "broker.ps1"
+    broker_script_path.write_text(ExecTool._build_windows_broker_script(), encoding="utf-8")
+    broker = _WindowsElevatedBrokerSession(
+        session_dir=session_dir,
+        shell_exe=shell_exe,
+        token="token",
+        broker_script_path=broker_script_path,
+        request_path=session_dir / "request.json",
+        response_path=session_dir / "response.json",
+        ready_path=session_dir / "ready.json",
+        stop_path=session_dir / "stop.txt",
+    )
+
+    process = await asyncio.create_subprocess_exec(
+        shell_exe,
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(broker_script_path),
+        "-SessionDir",
+        str(session_dir),
+        "-Token",
+        broker.token,
+        "-ShellPath",
+        shell_exe,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    try:
+        deadline = asyncio.get_running_loop().time() + 10
+        while not broker.ready_path.exists():
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("Broker script did not become ready")
+            await asyncio.sleep(0.05)
+
+        stdout, stderr, exit_code, timed_out = await tool._send_windows_broker_request(
+            broker,
+            "Get-ChildItem -Path $env:TEMP | Out-Null",
+            str(tmp_path),
+            5,
+        )
+
+        assert stdout == b""
+        assert stderr == b""
+        assert exit_code == 0
+        assert timed_out is False
+    finally:
+        broker.stop_path.write_text("stop\n", encoding="utf-8")
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
 
 
 # --- _resolve_type and nullable param tests ---

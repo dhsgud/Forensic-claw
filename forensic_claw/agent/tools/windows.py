@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from forensic_claw.agent.tools.base import Tool
+from forensic_claw.agent.tools.shell import ExecTool
 from forensic_claw.forensics.store import CaseStore
 from forensic_claw.forensics.windows.amcache import analyze_amcache_artifact
 from forensic_claw.forensics.windows.eventlog import (
@@ -24,6 +26,10 @@ class _WindowsTool(Tool):
     @property
     def store(self) -> CaseStore:
         return CaseStore(self._workspace)
+
+    @staticmethod
+    def _powershell_single_quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
 
 
 class WindowsEventLogQueryTool(_WindowsTool):
@@ -101,6 +107,8 @@ class WindowsEventLogQueryTool(_WindowsTool):
 
 
 class WindowsPrefetchAnalyzeTool(_WindowsTool):
+    _DIRECTORY_DEFAULT_MAX_FILES = 5
+
     def __init__(self, workspace: Path, runner: PECmdRunner | None = None):
         super().__init__(workspace)
         self._runner = runner
@@ -111,7 +119,10 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
 
     @property
     def description(self) -> str:
-        return "Analyze a Prefetch artifact, store evidence, and append execution timeline entries."
+        return (
+            "Analyze a Prefetch artifact, or analyze the most recent .pf files from a "
+            "Prefetch directory, store evidence, and append execution timeline entries."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -119,7 +130,17 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
             "type": "object",
             "properties": {
                 "case_id": {"type": "string", "description": "Target forensic case id"},
-                "prefetch_path": {"type": "string", "description": "Path to a Prefetch artifact"},
+                "prefetch_path": {
+                    "type": "string",
+                    "description": "Path to a Prefetch artifact or a directory containing .pf files",
+                },
+                "max_files": {
+                    "type": "integer",
+                    "description": (
+                        "When prefetch_path is a directory, analyze up to this many recent .pf files "
+                        f"(default {self._DIRECTORY_DEFAULT_MAX_FILES})."
+                    ),
+                },
                 "layout_path": {
                     "type": "string",
                     "description": "Optional path to Layout.ini for Prefetch listing enrichment",
@@ -136,10 +157,40 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
         self,
         case_id: str,
         prefetch_path: str | None = None,
+        max_files: int = _DIRECTORY_DEFAULT_MAX_FILES,
         layout_path: str | None = None,
         source_id: str | None = None,
         **kwargs: Any,
     ) -> str:
+        if source_id is None and prefetch_path is not None:
+            requested_path = Path(prefetch_path)
+            if requested_path.is_dir():
+                limit = max(1, int(max_files or self._DIRECTORY_DEFAULT_MAX_FILES))
+                targets = await self._list_directory_prefetch_candidates(requested_path, limit)
+                if not targets:
+                    raise FileNotFoundError(f"No .pf files found under {requested_path}")
+
+                results = [
+                    analyze_prefetch_artifact(
+                        self.store,
+                        case_id=case_id,
+                        prefetch_path=target,
+                        layout_path=layout_path,
+                        runner=self._runner,
+                    )
+                    for target in targets
+                ]
+                evidence_ids = [result.evidence.id for result in results if result.evidence.id]
+                timeline_count = sum(len(result.timeline_entries) for result in results)
+                analyzed_names = ", ".join(target.name for target in targets[:3])
+                if len(targets) > 3:
+                    analyzed_names += ", ..."
+                return (
+                    f"Analyzed Prefetch directory for case {case_id}: "
+                    f"files={len(results)}, evidence={len(evidence_ids)}, "
+                    f"timeline_entries={timeline_count}, samples={analyzed_names}"
+                )
+
         result = analyze_prefetch_artifact(
             self.store,
             case_id=case_id,
@@ -154,6 +205,57 @@ class WindowsPrefetchAnalyzeTool(_WindowsTool):
             f"evidence={result.evidence.id}, "
             f"timeline_entries={len(result.timeline_entries)}"
         )
+
+    async def _list_directory_prefetch_candidates(
+        self,
+        requested_path: Path,
+        limit: int,
+    ) -> list[Path]:
+        try:
+            candidates = sorted(
+                (
+                    candidate
+                    for candidate in requested_path.glob("*.pf")
+                    if candidate.is_file()
+                ),
+                key=lambda candidate: candidate.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                return candidates[:limit]
+            next(requested_path.iterdir(), None)
+            return []
+        except PermissionError:
+            return await self._list_directory_prefetch_candidates_via_exec(requested_path, limit)
+
+    async def _list_directory_prefetch_candidates_via_exec(
+        self,
+        requested_path: Path,
+        limit: int,
+    ) -> list[Path]:
+        exec_tool = ExecTool(timeout=60, working_dir=str(self._workspace))
+        path_literal = self._powershell_single_quote(str(requested_path))
+        command = (
+            "$prefetchFiles = @(\n"
+            f"  Get-ChildItem -LiteralPath {path_literal} -Filter '*.pf' -File -ErrorAction Stop |\n"
+            "  Sort-Object LastWriteTime -Descending |\n"
+            f"  Select-Object -First {limit} -ExpandProperty FullName\n"
+            ")\n"
+            "$prefetchFiles\n"
+        )
+        capture = await exec_tool.capture(command, working_dir=str(self._workspace))
+        if capture.timed_out:
+            raise TimeoutError(f"Timed out while enumerating Prefetch directory {requested_path}")
+        if capture.exit_code not in (0, None):
+            detail = ExecTool._decode_output(capture.stderr or capture.stdout).strip() or "unknown error"
+            raise RuntimeError(f"Failed to enumerate Prefetch directory {requested_path}: {detail}")
+
+        output = ExecTool._decode_output(capture.stdout)
+        return [
+            Path(line.strip())
+            for line in output.splitlines()
+            if line.strip() and os.path.splitext(line.strip())[1].lower() == ".pf"
+        ]
 
 
 class WindowsAmcacheAnalyzeTool(_WindowsTool):

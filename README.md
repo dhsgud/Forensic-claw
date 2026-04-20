@@ -199,7 +199,7 @@ python -m forensic_claw onboard --no-wizard
       "model": "qwen1.5-35b-4bit",
       "provider": "vllm",
       "maxTokens": 8192,
-      "contextWindowTokens": 65536,
+      "contextWindowTokens": 32768,
       "temperature": 0.1
     }
   },

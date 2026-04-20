@@ -36,6 +36,15 @@ class _WindowsElevatedBrokerSession:
     stop_path: Path
 
 
+@dataclass(frozen=True)
+class CommandCapture:
+    stdout: bytes
+    stderr: bytes
+    exit_code: int | None
+    timed_out: bool
+    broker_fallback_note: str | None = None
+
+
 class ExecTool(Tool):
     """Tool to execute shell commands."""
 
@@ -97,7 +106,7 @@ class ExecTool(Tool):
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",              # del /f, del /q
             r"\brmdir\s+/s\b",               # rmdir /s
-            r"(?:^|[;&|]\s*)format\b",       # format (as standalone command only)
+            r"(?:^|[;&|]\s*)format(?:\s|$)",  # format (as standalone command only)
             r"\b(mkfs|diskpart)\b",          # disk operations
             r"\bdd\s+if=",                   # dd
             r">\s*/dev/sd",                  # write to disk
@@ -153,48 +162,72 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str:
+        try:
+            capture = await self.capture(command, working_dir=working_dir, timeout=timeout)
+        except ValueError as e:
+            return str(e)
+        except Exception as e:
+            return f"Error executing command: {e}"
+
+        if capture.timed_out:
+            effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
+            return f"Error: Command timed out after {effective_timeout} seconds"
+        result = self._format_command_result(capture.stdout, capture.stderr, capture.exit_code)
+        if capture.broker_fallback_note:
+            return f"{capture.broker_fallback_note}{result}"
+        return result
+
+    async def capture(
+        self,
+        command: str,
+        working_dir: str | None = None,
+        timeout: int | None = None,
+    ) -> CommandCapture:
         command = self._normalize_command_for_execution(command)
         cwd = working_dir or self.working_dir or os.getcwd()
         guard_error = self._guard_command(command, cwd)
         if guard_error:
-            return guard_error
+            raise ValueError(guard_error)
 
         effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
         env = self._build_env()
         broker_fallback_note: str | None = None
 
-        try:
-            if self._should_use_windows_elevated_broker():
-                try:
-                    stdout, stderr, exit_code, timed_out = await self._execute_via_windows_broker(
-                        command,
-                        cwd,
-                        effective_timeout,
-                        env,
-                    )
-                except Exception as e:
-                    self._disable_windows_broker()
-                    logger.warning(
-                        "Windows elevated broker unavailable, falling back to direct execution: {}",
-                        e,
-                    )
-                    broker_fallback_note = (
-                        f"Note: Windows elevation broker unavailable ({e}). "
-                        "The command ran without elevation.\n\n"
-                    )
-                else:
-                    if timed_out:
-                        return f"Error: Command timed out after {effective_timeout} seconds"
-                    return self._format_command_result(stdout, stderr, exit_code)
+        if self._should_use_windows_elevated_broker():
+            try:
+                stdout, stderr, exit_code, timed_out = await self._execute_via_windows_broker(
+                    command,
+                    cwd,
+                    effective_timeout,
+                    env,
+                )
+            except Exception as e:
+                self._disable_windows_broker()
+                logger.warning(
+                    "Windows elevated broker unavailable, falling back to direct execution: {}",
+                    e,
+                )
+                broker_fallback_note = (
+                    f"Note: Windows elevation broker unavailable ({e}). "
+                    "The command ran without elevation.\n\n"
+                )
+            else:
+                return CommandCapture(
+                    stdout=stdout,
+                    stderr=stderr,
+                    exit_code=exit_code,
+                    timed_out=timed_out,
+                )
 
-            process = await self._spawn_process(command, cwd, env)
-            stdout, stderr, timed_out = await self._collect_output(process, effective_timeout)
-            if timed_out:
-                return f"Error: Command timed out after {effective_timeout} seconds"
-            result = self._format_command_result(stdout, stderr, process.returncode)
-            return f"{broker_fallback_note}{result}" if broker_fallback_note else result
-        except Exception as e:
-            return f"Error executing command: {e}"
+        process = await self._spawn_process(command, cwd, env)
+        stdout, stderr, timed_out = await self._collect_output(process, effective_timeout)
+        return CommandCapture(
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=process.returncode,
+            timed_out=timed_out,
+            broker_fallback_note=broker_fallback_note,
+        )
 
     def describe_execution(
         self,
@@ -602,7 +635,8 @@ class ExecTool(Tool):
                     raise RuntimeError("Elevated broker returned a mismatched response")
                 stdout = base64.b64decode(payload.get("stdoutBase64", "") or "")
                 stderr = base64.b64decode(payload.get("stderrBase64", "") or "")
-                exit_code = int(payload.get("exitCode", 1))
+                raw_exit_code = payload.get("exitCode", 1)
+                exit_code = int(raw_exit_code) if raw_exit_code is not None else 1
                 timed_out = bool(payload.get("timedOut", False))
                 return stdout, stderr, exit_code, timed_out
             await asyncio.sleep(0.1)
@@ -729,9 +763,22 @@ elseif ($?) { exit 0 } else { exit 1 }
     }
 
     $process.Refresh()
-    $stdoutBytes = if (Test-Path -LiteralPath $stdoutPath) { [System.IO.File]::ReadAllBytes($stdoutPath) } else { [byte[]]::new(0) }
-    $stderrBytes = if (Test-Path -LiteralPath $stderrPath) { [System.IO.File]::ReadAllBytes($stderrPath) } else { [byte[]]::new(0) }
-    $exitCode = if ($timedOut) { 1 } elseif ($process.HasExited) { $process.ExitCode } else { 1 }
+    [byte[]]$stdoutBytes = @()
+    if (Test-Path -LiteralPath $stdoutPath) {
+        $stdoutBytes = [System.IO.File]::ReadAllBytes($stdoutPath)
+    }
+    [byte[]]$stderrBytes = @()
+    if (Test-Path -LiteralPath $stderrPath) {
+        $stderrBytes = [System.IO.File]::ReadAllBytes($stderrPath)
+    }
+    $exitCode = 1
+    if (-not $timedOut -and $process.HasExited) {
+        if ($null -ne $process.ExitCode) {
+            $exitCode = [int]$process.ExitCode
+        } else {
+            $exitCode = 0
+        }
+    }
 
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 

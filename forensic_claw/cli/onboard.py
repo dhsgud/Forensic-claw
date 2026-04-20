@@ -711,7 +711,7 @@ def _try_auto_fill_context_window(model: BaseModel, new_model_name: str) -> None
 
     current_context = getattr(model, "context_window_tokens", None)
 
-    # Check if current value is the default (65536)
+    # Check if current value is the default from AgentDefaults
     # We only auto-fill if the user hasn't changed it from default
     from forensic_claw.config.schema import AgentDefaults
 

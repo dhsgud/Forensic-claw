@@ -59,7 +59,7 @@ class AgentDefaults(Base):
     model: str = "qwen1.5-35b-4bit"
     provider: str = "vllm"
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    context_window_tokens: int = 32_768
     temperature: float = 0.1
     max_tool_iterations: int = 40
     reasoning_effort: str | None = None

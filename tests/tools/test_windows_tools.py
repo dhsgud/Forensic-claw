@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from forensic_claw.agent.loop import AgentLoop
+from forensic_claw.agent.tools.shell import CommandCapture, ExecTool
 from forensic_claw.agent.tools.windows import (
     WindowsAmcacheAnalyzeTool,
     WindowsEventLogQueryTool,
@@ -53,6 +55,131 @@ async def test_windows_tools_execute_and_update_case_store(
     final_store = CaseStore(tmp_path)
     assert len(final_store.read_timeline(case.id)) == 6
     assert len(final_store.read_graph(case.id).report_sections) >= 4
+
+
+@pytest.mark.asyncio
+async def test_windows_prefetch_tool_accepts_directory_input_and_limits_recent_files(
+    tmp_path: Path,
+    prefetch_pecmd_runner,
+) -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "windows"
+        / "prefetch"
+        / "CALC.EXE-TEST.pf"
+    )
+    prefetch_dir = tmp_path / "prefetch"
+    prefetch_dir.mkdir()
+
+    for index, name in enumerate(
+        (
+            "OLDAPP.EXE-11111111.pf",
+            "MIDAPP.EXE-22222222.pf",
+            "NEWAPP.EXE-33333333.pf",
+        )
+    ):
+        path = prefetch_dir / name
+        path.write_bytes(fixture_path.read_bytes())
+        ts = 1_700_000_000 + index
+        os.utime(path, (ts, ts))
+
+    store = CaseStore(tmp_path)
+    case = store.create_case(case_id="case-2026-0002", title="Prefetch directory case")
+    prefetch_tool = WindowsPrefetchAnalyzeTool(workspace=tmp_path, runner=prefetch_pecmd_runner)
+
+    result = await prefetch_tool.execute(
+        case_id=case.id,
+        prefetch_path=str(prefetch_dir),
+        max_files=2,
+    )
+
+    assert "files=2" in result
+    assert "NEWAPP.EXE-33333333.pf" in result
+    assert "MIDAPP.EXE-22222222.pf" in result
+    assert "OLDAPP.EXE-11111111.pf" not in result
+
+    final_store = CaseStore(tmp_path)
+    assert len(final_store.list_evidence_ids(case.id)) == 2
+    assert len(final_store.read_timeline(case.id)) == 4
+
+
+@pytest.mark.asyncio
+async def test_windows_prefetch_tool_uses_exec_fallback_for_inaccessible_directory(
+    tmp_path: Path,
+    prefetch_pecmd_runner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "windows"
+        / "prefetch"
+        / "CALC.EXE-TEST.pf"
+    )
+    prefetch_dir = tmp_path / "prefetch"
+    prefetch_dir.mkdir()
+
+    created: list[Path] = []
+    for index, name in enumerate(
+        (
+            "OLDAPP.EXE-11111111.pf",
+            "MIDAPP.EXE-22222222.pf",
+            "NEWAPP.EXE-33333333.pf",
+        )
+    ):
+        path = prefetch_dir / name
+        path.write_bytes(fixture_path.read_bytes())
+        ts = 1_700_000_000 + index
+        os.utime(path, (ts, ts))
+        created.append(path)
+
+    original_glob = Path.glob
+    original_iterdir = Path.iterdir
+
+    def fake_glob(self: Path, pattern: str):
+        if self == prefetch_dir and pattern == "*.pf":
+            return iter(())
+        return original_glob(self, pattern)
+
+    def fake_iterdir(self: Path):
+        if self == prefetch_dir:
+            raise PermissionError("Access is denied")
+        return original_iterdir(self)
+
+    async def fake_capture(
+        self: ExecTool,
+        command: str,
+        working_dir: str | None = None,
+        timeout: int | None = None,
+    ) -> CommandCapture:
+        assert str(prefetch_dir) in command
+        assert "-LiteralPath" in command
+        return CommandCapture(
+            stdout="\n".join((str(created[2]), str(created[1]))).encode("utf-8"),
+            stderr=b"",
+            exit_code=0,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(Path, "glob", fake_glob)
+    monkeypatch.setattr(Path, "iterdir", fake_iterdir)
+    monkeypatch.setattr(ExecTool, "capture", fake_capture)
+
+    store = CaseStore(tmp_path)
+    case = store.create_case(case_id="case-2026-0003", title="Prefetch exec fallback case")
+    prefetch_tool = WindowsPrefetchAnalyzeTool(workspace=tmp_path, runner=prefetch_pecmd_runner)
+
+    result = await prefetch_tool.execute(
+        case_id=case.id,
+        prefetch_path=str(prefetch_dir),
+        max_files=2,
+    )
+
+    assert "files=2" in result
+    assert "NEWAPP.EXE-33333333.pf" in result
+    assert "MIDAPP.EXE-22222222.pf" in result
+    assert "OLDAPP.EXE-11111111.pf" not in result
 
 
 def test_agent_loop_registers_windows_artifact_tools(tmp_path: Path) -> None:
