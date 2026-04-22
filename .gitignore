@@ -32,6 +32,8 @@ uv.lock
 *.E01
 *.E0?
 *.dd
+/Forensic-claw.pdf
+/tmp_forensic_claw_pdf.txt
 # Keep markdown local-only by default. Only packaged runtime resources are tracked.
 *.md
 !/README.md
