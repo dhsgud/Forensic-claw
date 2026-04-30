@@ -29,6 +29,8 @@ uv.lock
 /node_modules/
 /package.json
 /package-lock.json
+/Forensic-claw.pdf
+/tmp_forensic_claw_pdf.txt
 *.E01
 *.E0?
 *.dd
