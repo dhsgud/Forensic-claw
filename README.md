@@ -4,6 +4,83 @@
   <img src="forensic_claw_logo.png" alt="Forensic-Claw Logo" width="400">
 </div>
 
+## Windows Release 설치 및 실행
+
+실사용자는 GitHub Release 페이지에서 Windows 설치 파일을 내려받아 실행하는 방식을 권장합니다.
+
+Release page:
+
+- [Forensic-Claw Releases](https://github.com/dhsgud/Forensic-claw/releases)
+
+릴리즈에 올릴 권장 파일:
+
+- `Forensic-Claw-windows-x64.zip`: PyInstaller `onedir` 빌드 폴더 전체를 압축한 파일
+- `Forensic-Claw-<version>.msi`: WiX로 만든 Windows 설치 파일
+
+중요: `Forensic-Claw.exe` 단일 파일만 올리면 안 됩니다. 현재 EXE 빌드는 `onedir` 방식이므로
+`dist/windows/Forensic-Claw/` 폴더 전체를 zip으로 압축해서 올려야 합니다.
+
+### ZIP으로 실행
+
+1. [Releases](https://github.com/dhsgud/Forensic-claw/releases)에서
+   `Forensic-Claw-windows-x64.zip`을 다운로드합니다.
+2. 원하는 위치에 압축을 풉니다.
+3. PowerShell에서 압축 해제한 폴더로 이동합니다.
+
+```powershell
+cd .\Forensic-Claw
+.\Forensic-Claw.exe gateway --open-browser
+```
+
+### MSI로 설치
+
+1. [Releases](https://github.com/dhsgud/Forensic-claw/releases)에서
+   `Forensic-Claw-<version>.msi`를 다운로드합니다.
+2. MSI를 실행해 설치합니다.
+3. Start Menu에서 `Forensic-Claw WebUI`를 실행합니다.
+
+### 첫 실행 설정
+
+WebUI가 열리면 아래 항목을 입력합니다.
+
+- 케이스 이름
+- 수사관 이름
+- Local LLM API Base
+- Neo4j 설정
+
+Local LLM 예시:
+
+```text
+LM Studio: http://127.0.0.1:1234/v1
+Ollama:    http://127.0.0.1:11434/v1
+vLLM:      http://127.0.0.1:8000/v1
+```
+
+Neo4j를 Docker로 사용할 경우:
+
+```powershell
+.\Forensic-Claw.exe infra init --backend docker
+.\Forensic-Claw.exe infra up --backend docker
+```
+
+WebUI Neo4j 설정:
+
+```text
+URI: bolt://127.0.0.1:7687
+Username: neo4j
+Password: forensic1234
+Database: neo4j
+```
+
+Docker를 사용할 수 없는 조사 PC에서는 Native 또는 External backend를 선택합니다.
+
+```powershell
+.\Forensic-Claw.exe infra init --backend native
+.\Forensic-Claw.exe infra init --backend external
+```
+
+자세한 Windows 배포 문서는 [Windows Native Packaging](docs/WINDOWS_NATIVE_PACKAGING.md)을 참고하세요.
+
 로컬 LLM 기반 에이전트 프레임워크이자 Native Windows 지향 포렌식 워크벤치의 기반 저장소입니다. 현재 이 저장소는 `discord`, `kakaotalk`, `webui` 채널과 `vllm`, `custom` provider를 중심으로 정리되어 있으며, WebUI 채팅/세션/읽기 API와 Windows 런타임 baseline까지 포함합니다.
 
 ## 기획 배경
