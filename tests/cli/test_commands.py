@@ -22,9 +22,12 @@ runner = CliRunner()
 def test_registry_only_exposes_local_providers() -> None:
     names = [spec.name for spec in PROVIDERS]
 
-    assert names == ["custom", "vllm"]
+    assert names == ["custom", "vllm", "ollama", "lmstudio"]
     assert find_by_name("custom").display_name == "Custom (llama.cpp)"
     assert find_by_name("vllm").default_api_base == "http://localhost:8000/v1"
+    assert find_by_name("ollama").default_api_base == "http://127.0.0.1:11434/v1"
+    assert find_by_name("lmstudio").default_api_base == "http://127.0.0.1:1234/v1"
+    assert find_by_name("lm-studio").name == "lmstudio"
 
 
 def test_default_config_uses_vllm() -> None:
@@ -33,7 +36,6 @@ def test_default_config_uses_vllm() -> None:
     assert config.agents.defaults.provider == "vllm"
     assert config.get_provider_name() == "vllm"
     assert config.get_api_base() == "http://localhost:8000/v1"
-    assert config.agents.defaults.archive_final_answer_as_wiki is False
     assert config.agents.defaults.reset_session_after_answer is False
 
 

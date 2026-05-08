@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import uuid
 import webbrowser
@@ -25,7 +24,6 @@ from forensic_claw.session.scopes import build_scoped_session_key, parse_scoped_
 from forensic_claw.utils.helpers import (
     current_time_str,
     extract_message_thinking_text,
-    safe_filename,
 )
 
 
@@ -64,11 +62,21 @@ class WebUIChannel(BaseChannel):
         self._sockets: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
         self._shell_traces: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._session_manager: SessionManager | None = None
+        self._model_settings: Any | None = None
+        self._knowledge_settings: Any | None = None
         self._app: web.Application | None = None
 
-    def bind_runtime(self, *, session_manager: SessionManager | None = None) -> None:
+    def bind_runtime(
+        self,
+        *,
+        session_manager: SessionManager | None = None,
+        model_settings: Any | None = None,
+        knowledge_settings: Any | None = None,
+    ) -> None:
         """Inject runtime services that channels do not own directly."""
         self._session_manager = session_manager
+        self._model_settings = model_settings
+        self._knowledge_settings = knowledge_settings
 
     def create_app(self) -> web.Application:
         """Create the aiohttp application used by the channel."""
@@ -82,6 +90,12 @@ class WebUIChannel(BaseChannel):
         app.router.add_get("/ui/assets/{asset}", self._handle_asset)
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/api/bootstrap", self._handle_bootstrap)
+        app.router.add_get("/api/model-config", self._handle_model_config)
+        app.router.add_patch("/api/model-config", self._handle_model_config_update)
+        app.router.add_post("/api/model-config/test", self._handle_model_config_test)
+        app.router.add_get("/api/knowledge-config", self._handle_knowledge_config)
+        app.router.add_patch("/api/knowledge-config", self._handle_knowledge_config_update)
+        app.router.add_post("/api/knowledge-config/test", self._handle_knowledge_config_test)
         app.router.add_post("/api/chat", self._handle_chat)
         app.router.add_post("/api/stop", self._handle_stop)
         app.router.add_get("/api/cases", self._handle_cases_list)
@@ -90,8 +104,6 @@ class WebUIChannel(BaseChannel):
         app.router.add_get("/api/cases/{case_id}/graph", self._handle_case_graph)
         app.router.add_get("/api/cases/{case_id}/evidence/{evidence_id}", self._handle_evidence_detail)
         app.router.add_get("/api/cases/{case_id}/sources/{source_id}", self._handle_source_detail)
-        app.router.add_get("/api/wiki", self._handle_wiki_list)
-        app.router.add_get("/api/wiki/{note_id}", self._handle_wiki_detail)
         app.router.add_get("/api/sessions", self._handle_sessions_list)
         app.router.add_get(r"/api/sessions/{session_key:.+}", self._handle_session_detail)
         self._app = app
@@ -213,11 +225,6 @@ class WebUIChannel(BaseChannel):
     @property
     def _workspace_root(self) -> Path | None:
         return self._session_manager.workspace if self._session_manager else None
-
-    @property
-    def _wiki_root(self) -> Path | None:
-        workspace = self._workspace_root
-        return workspace / "wiki" if workspace else None
 
     @property
     def _cases_root(self) -> Path | None:
@@ -383,144 +390,6 @@ class WebUIChannel(BaseChannel):
             "sourceCount": len(source_ids),
         }
 
-    @staticmethod
-    def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-        if not text.startswith("---"):
-            return {}, text
-
-        lines = text.splitlines()
-        if not lines or lines[0].strip() != "---":
-            return {}, text
-
-        end_idx = None
-        for idx in range(1, len(lines)):
-            if lines[idx].strip() == "---":
-                end_idx = idx
-                break
-        if end_idx is None:
-            return {}, text
-
-        metadata: dict[str, Any] = {}
-        for line in lines[1:end_idx]:
-            if ":" not in line:
-                continue
-            key, raw_value = line.split(":", 1)
-            value = raw_value.strip()
-            if not key.strip():
-                continue
-            if not value:
-                metadata[key.strip()] = ""
-                continue
-            try:
-                metadata[key.strip()] = json.loads(value)
-            except Exception:
-                metadata[key.strip()] = value.strip("\"'")
-
-        body = "\n".join(lines[end_idx + 1 :])
-        return metadata, body
-
-    @staticmethod
-    def _markdown_summary(text: str, *, max_len: int = 160) -> str:
-        lines: list[str] = []
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            lines.append(stripped)
-            if len(" ".join(lines)) >= max_len:
-                break
-
-        summary = " ".join(lines).strip()
-        if len(summary) > max_len:
-            summary = summary[: max_len - 3].rstrip() + "..."
-        return summary or "(empty)"
-
-    @staticmethod
-    def _encode_note_id(relative_path: str) -> str:
-        raw = relative_path.encode("utf-8")
-        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-    @staticmethod
-    def _decode_note_id(note_id: str) -> str | None:
-        if not note_id:
-            return None
-        padding = "=" * (-len(note_id) % 4)
-        try:
-            return base64.urlsafe_b64decode(note_id + padding).decode("utf-8")
-        except Exception:
-            return None
-
-    def _wiki_dir_for_scope(
-        self,
-        *,
-        browser_session_id: str,
-        case_id: str | None = None,
-        artifact_id: str | None = None,
-    ) -> Path | None:
-        root = self._wiki_root
-        if root is None:
-            return None
-
-        session_key = build_scoped_session_key(
-            self.name,
-            browser_session_id,
-            case_id=case_id,
-            artifact_id=artifact_id,
-        )
-        scope = parse_scoped_session_key(session_key)
-
-        if scope.case_id:
-            wiki_dir = root / "cases" / safe_filename(scope.case_id)
-            if scope.artifact_id:
-                wiki_dir = wiki_dir / "artifacts" / safe_filename(scope.artifact_id)
-            return wiki_dir
-        if scope.artifact_id:
-            return root / "artifacts" / safe_filename(scope.artifact_id)
-        return root / "sessions" / safe_filename(scope.base_key.replace(":", "_"))
-
-    def _wiki_note_summary(self, path: Path, *, wiki_root: Path) -> dict[str, Any]:
-        text = path.read_text(encoding="utf-8")
-        metadata, body = self._parse_frontmatter(text)
-        relative_path = path.relative_to(wiki_root).as_posix()
-        return {
-            "id": self._encode_note_id(relative_path),
-            "relativePath": relative_path,
-            "title": metadata.get("title") or path.stem,
-            "createdAt": metadata.get("created_at"),
-            "caseId": metadata.get("case_id"),
-            "artifactId": metadata.get("artifact_id"),
-            "summary": self._markdown_summary(body),
-        }
-
-    def _list_wiki_notes(
-        self,
-        *,
-        browser_session_id: str,
-        case_id: str | None = None,
-        artifact_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        root = self._wiki_root
-        wiki_dir = self._wiki_dir_for_scope(
-            browser_session_id=browser_session_id,
-            case_id=case_id,
-            artifact_id=artifact_id,
-        )
-        if root is None or wiki_dir is None or not wiki_dir.is_dir():
-            return []
-
-        notes = [self._wiki_note_summary(path, wiki_root=root) for path in wiki_dir.glob("*.md")]
-        return sorted(notes, key=lambda row: row.get("createdAt", ""), reverse=True)
-
-    def _wiki_note_path(self, note_id: str) -> Path | None:
-        root = self._wiki_root
-        relative_path = self._decode_note_id(note_id)
-        if root is None or relative_path is None:
-            return None
-        candidate = self._resolve_child(root, relative_path)
-        if candidate is None or not candidate.is_file() or candidate.suffix.lower() != ".md":
-            return None
-        return candidate
-
     def _serialize_message_content(self, content: Any) -> str:
         if isinstance(content, str):
             return content
@@ -626,9 +495,13 @@ class WebUIChannel(BaseChannel):
         else:
             session_id = previous_session_id or self._new_browser_session_id()
         cases_root = self._cases_root
-        wiki_root = self._wiki_root
         has_cases = bool(cases_root and cases_root.is_dir() and any(cases_root.iterdir()))
-        has_wiki = bool(wiki_root and wiki_root.is_dir() and any(wiki_root.iterdir()))
+        model_config = self._model_settings.snapshot() if self._model_settings else None
+        knowledge_config = (
+            await asyncio.to_thread(self._knowledge_settings.snapshot)
+            if self._knowledge_settings
+            else None
+        )
         return self._json_response(
             {
                 "appName": "Forensic-Claw",
@@ -637,6 +510,8 @@ class WebUIChannel(BaseChannel):
                 "sessionId": session_id,
                 "scopes": {"caseId": None, "artifactId": None},
                 "features": {"streaming": self.supports_streaming},
+                "modelConfig": model_config,
+                "knowledgeConfig": knowledge_config,
                 "commands": [
                     {
                         "command": item.command,
@@ -648,12 +523,113 @@ class WebUIChannel(BaseChannel):
                 "workspace": {
                     "hasSessions": bool(self._sessions_for_browser(session_id or "")) if session_id else False,
                     "hasCases": has_cases,
-                    "hasWiki": has_wiki,
                 },
                 "shellTraces": list(self._shell_traces.get(session_id or "", [])) if session_id else [],
             },
             session_id=session_id,
         )
+
+    async def _handle_model_config(self, _request: web.Request) -> web.Response:
+        if not self._model_settings:
+            return self._json_response({"error": "model_settings_unavailable"}, status=503)
+        return self._json_response({"modelConfig": self._model_settings.snapshot()})
+
+    async def _handle_model_config_update(self, request: web.Request) -> web.Response:
+        if not self._model_settings:
+            return self._json_response({"ok": False, "error": "model_settings_unavailable"}, status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
+
+        api_base_supplied = "apiBase" in body or "api_base" in body
+        try:
+            model_config = await self._model_settings.apply(
+                provider=body.get("provider"),
+                model=body.get("model"),
+                api_base=body.get("apiBase", body.get("api_base")),
+                api_base_supplied=api_base_supplied,
+            )
+        except ValueError as exc:
+            return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        return self._json_response({"ok": True, "modelConfig": model_config})
+
+    async def _handle_model_config_test(self, request: web.Request) -> web.Response:
+        if not self._model_settings:
+            return self._json_response({"ok": False, "error": "model_settings_unavailable"}, status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        result = await self._model_settings.test_connection(
+            provider=body.get("provider"),
+            api_base=body.get("apiBase", body.get("api_base")),
+        )
+        return self._json_response({"ok": bool(result.get("ok")), "result": result})
+
+    @staticmethod
+    def _knowledge_config_args(body: dict[str, Any]) -> dict[str, Any]:
+        neo4j = body.get("neo4j") if isinstance(body.get("neo4j"), dict) else {}
+        return {
+            "enabled": body.get("enabled"),
+            "store_dir": body.get("storeDir", body.get("store_dir")),
+            "neo4j_enabled": body.get(
+                "neo4jEnabled",
+                body.get("neo4j_enabled", neo4j.get("enabled")),
+            ),
+            "uri": body.get("uri", neo4j.get("uri")),
+            "username": body.get("username", neo4j.get("username")),
+            "password": body.get("password", neo4j.get("password")),
+            "password_supplied": "password" in body or "password" in neo4j,
+            "database": body.get("database", neo4j.get("database")),
+        }
+
+    async def _handle_knowledge_config(self, _request: web.Request) -> web.Response:
+        if not self._knowledge_settings:
+            return self._json_response({"error": "knowledge_settings_unavailable"}, status=503)
+        snapshot = await asyncio.to_thread(self._knowledge_settings.snapshot)
+        return self._json_response({"knowledgeConfig": snapshot})
+
+    async def _handle_knowledge_config_update(self, request: web.Request) -> web.Response:
+        if not self._knowledge_settings:
+            return self._json_response({"ok": False, "error": "knowledge_settings_unavailable"}, status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
+        if not isinstance(body, dict):
+            return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
+
+        try:
+            knowledge_config = await asyncio.to_thread(
+                self._knowledge_settings.apply,
+                **self._knowledge_config_args(body),
+            )
+        except ValueError as exc:
+            return self._json_response({"ok": False, "error": str(exc)}, status=400)
+        return self._json_response({"ok": True, "knowledgeConfig": knowledge_config})
+
+    async def _handle_knowledge_config_test(self, request: web.Request) -> web.Response:
+        if not self._knowledge_settings:
+            return self._json_response({"ok": False, "error": "knowledge_settings_unavailable"}, status=503)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        args = self._knowledge_config_args(body)
+        result = await asyncio.to_thread(
+            self._knowledge_settings.test_connection,
+            enabled=args["neo4j_enabled"],
+            uri=args["uri"],
+            username=args["username"],
+            password=args["password"],
+            password_supplied=args["password_supplied"],
+            database=args["database"],
+        )
+        connected = result.get("state") in {"connected", "disabled"}
+        return self._json_response({"ok": connected, "result": result})
 
     async def _handle_chat(self, request: web.Request) -> web.Response:
         try:
@@ -665,16 +641,28 @@ class WebUIChannel(BaseChannel):
         text = str(body.get("text") or "").strip()
         case_id = body.get("caseId") or body.get("case_id")
         artifact_id = body.get("artifactId") or body.get("artifact_id")
+        case_name = str(body.get("caseName") or body.get("case_name") or "").strip()
+        investigator_name = str(
+            body.get("investigatorName") or body.get("investigator_name") or ""
+        ).strip()
 
         if not session_id:
             return self._json_response({"ok": False, "error": "missing_session"}, status=400)
         if not text:
             return self._json_response({"ok": False, "error": "empty_text"}, session_id=session_id, status=400)
+        if not case_name or not investigator_name:
+            return self._json_response(
+                {"ok": False, "error": "missing_case_setup"},
+                session_id=session_id,
+                status=400,
+            )
 
         metadata = {
             "_wants_stream": self.supports_streaming,
             **({"case_id": case_id} if case_id else {}),
             **({"artifact_id": artifact_id} if artifact_id else {}),
+            "case_name": case_name,
+            "investigator_name": investigator_name,
         }
 
         await self._handle_message(
@@ -707,6 +695,10 @@ class WebUIChannel(BaseChannel):
         session_id = body.get("sessionId") or self._browser_session_from_request(request, create=False)
         case_id = body.get("caseId") or body.get("case_id")
         artifact_id = body.get("artifactId") or body.get("artifact_id")
+        case_name = str(body.get("caseName") or body.get("case_name") or "").strip()
+        investigator_name = str(
+            body.get("investigatorName") or body.get("investigator_name") or ""
+        ).strip()
 
         if not session_id:
             return self._json_response({"ok": False, "error": "missing_session"}, status=400)
@@ -714,6 +706,8 @@ class WebUIChannel(BaseChannel):
         metadata = {
             **({"case_id": case_id} if case_id else {}),
             **({"artifact_id": artifact_id} if artifact_id else {}),
+            **({"case_name": case_name} if case_name else {}),
+            **({"investigator_name": investigator_name} if investigator_name else {}),
         }
 
         await self._handle_message(
@@ -917,49 +911,5 @@ class WebUIChannel(BaseChannel):
                 "sourceId": source_dir.name,
                 "metadata": metadata if isinstance(metadata, dict) else {},
                 "files": self._file_listing(source_dir / "raw"),
-            }
-        )
-
-    async def _handle_wiki_list(self, request: web.Request) -> web.Response:
-        session_id = request.query.get("sessionId") or self._browser_session_from_request(request, create=False)
-        case_id = request.query.get("caseId") or request.query.get("case_id")
-        artifact_id = request.query.get("artifactId") or request.query.get("artifact_id")
-
-        if not session_id:
-            return self._json_response({"error": "missing_session"}, status=400)
-        if self._workspace_root is None:
-            return self._json_response({"error": "session_manager_unavailable"}, status=503)
-
-        notes = self._list_wiki_notes(
-            browser_session_id=session_id,
-            case_id=case_id,
-            artifact_id=artifact_id,
-        )
-        return self._json_response(
-            {
-                "notes": notes,
-                "scope": {
-                    "caseId": case_id or None,
-                    "artifactId": artifact_id or None,
-                },
-            },
-            session_id=session_id,
-        )
-
-    async def _handle_wiki_detail(self, request: web.Request) -> web.Response:
-        note_path = self._wiki_note_path(request.match_info["note_id"])
-        if note_path is None:
-            return self._json_response({"error": "note_not_found"}, status=404)
-
-        text = note_path.read_text(encoding="utf-8")
-        metadata, body = self._parse_frontmatter(text)
-        return self._json_response(
-            {
-                "note": {
-                    "id": request.match_info["note_id"],
-                    "title": metadata.get("title") or note_path.stem,
-                    "metadata": metadata,
-                    "content": body,
-                }
             }
         )

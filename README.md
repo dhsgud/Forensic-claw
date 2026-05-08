@@ -36,6 +36,7 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - cron
 - heartbeat
 - WebUI chat, session, streaming, shell trace, read-only case explorer
+- Local RAG + Neo4j knowledge preparation for large logs and Chrome History databases
 - channel plugin discovery via `forensic_claw.channels`
 - Native Windows baseline and Windows CI
 
@@ -44,7 +45,7 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - `forensic_claw/forensics/` 도메인 계층
 - Windows artifact native tools
 - structured case write pipeline
-- wiki/report 자동화
+- report 자동화
 
 ## 기준 문서
 
@@ -55,7 +56,6 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - [Native Windows Support Plan](docs/NATIVE_WINDOWS_SUPPORT_PLAN.md)
 - [Local Web UI Forensic Workbench Plan](docs/LOCAL_WEB_UI_FORENSIC_WORKBENCH_PLAN.md)
 - [개발 우선순위 로드맵](docs/DEVELOPMENT_PRIORITY_ROADMAP.md)
-- [Karpathy 스타일 포렌식 위키 스킬](docs/KARPATHY_FORENSIC_WIKI_SKILL.md)
 - [Windows Forensic Automation Plan](docs/WINDOWS_FORENSIC_AUTOMATION_PLAN.md)
 - [Windows Artifact MCP Overview](docs/WINDOWS_ARTIFACT_MCP_OVERVIEW.md)
 - [Windows Artifact Integration Strategy](docs/WINDOWS_ARTIFACT_INTEGRATION_STRATEGY.md)
@@ -66,6 +66,13 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 uv sync --all-extras
 python -m pytest tests -q
 ruff check forensic_claw tests
+```
+
+Local evidence preparation:
+
+```bash
+python -m forensic_claw agent --message "/knowledge ingest C:\path\to\evidence"
+python -m forensic_claw agent --message "/knowledge search suspicious-domain.example"
 ```
 
 ## Native Windows 설치 및 실행

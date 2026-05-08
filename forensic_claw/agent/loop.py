@@ -24,6 +24,11 @@ from forensic_claw.agent.tools.filesystem import (
     ReadFileTool,
     WriteFileTool,
 )
+from forensic_claw.agent.tools.knowledge import (
+    KnowledgeIngestTool,
+    KnowledgeSearchTool,
+    KnowledgeStatusTool,
+)
 from forensic_claw.agent.tools.message import MessageTool
 from forensic_claw.agent.tools.registry import ToolRegistry
 from forensic_claw.agent.tools.shell import ExecTool
@@ -32,13 +37,18 @@ from forensic_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from forensic_claw.bus.events import InboundMessage, OutboundMessage
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.command import CommandContext, CommandRouter, register_builtin_commands
+from forensic_claw.knowledge import KnowledgeService
 from forensic_claw.providers.base import LLMProvider
 from forensic_claw.session.manager import Session, SessionManager
 from forensic_claw.utils.helpers import extract_message_thinking_text, extract_think
-from forensic_claw.wiki import WikiArchive
 
 if TYPE_CHECKING:
-    from forensic_claw.config.schema import ChannelsConfig, ExecToolConfig, WebSearchConfig
+    from forensic_claw.config.schema import (
+        ChannelsConfig,
+        ExecToolConfig,
+        KnowledgeConfig,
+        WebSearchConfig,
+    )
     from forensic_claw.cron.service import CronService
 
 
@@ -89,6 +99,40 @@ class AgentLoop:
         "maxevents",
         "특정",
     )
+    _AUTO_CHROME_HISTORY_TARGET_PATTERNS = (
+        "chrome",
+        "크롬",
+        "browser",
+        "브라우저",
+    )
+    _AUTO_CHROME_HISTORY_DATA_PATTERNS = (
+        "history",
+        "history db",
+        "db",
+        "sqlite",
+        "검색기록",
+        "검색 기록",
+        "방문기록",
+        "방문 기록",
+        "웹기록",
+        "웹 기록",
+    )
+    _AUTO_CHROME_HISTORY_INTENT_PATTERNS = (
+        "조사",
+        "분석",
+        "찾",
+        "봐",
+        "확인",
+        "준비",
+        "전처리",
+        "ingest",
+        "prepare",
+        "investigate",
+        "analyze",
+        "analyse",
+        "review",
+        "search",
+    )
 
     def __init__(
         self,
@@ -106,14 +150,14 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        knowledge_config: KnowledgeConfig | None = None,
         timezone: str | None = None,
         thinking_language: str = "en",
         response_language: str = "ko",
         enforce_response_language: bool = True,
-        archive_final_answer_as_wiki: bool = False,
         reset_session_after_answer: bool = False,
     ):
-        from forensic_claw.config.schema import ExecToolConfig, WebSearchConfig
+        from forensic_claw.config.schema import ExecToolConfig, KnowledgeConfig, WebSearchConfig
 
         self.bus = bus
         self.channels_config = channels_config
@@ -125,6 +169,11 @@ class AgentLoop:
         self.web_search_config = web_search_config or WebSearchConfig()
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
+        self.knowledge_service = (
+            KnowledgeService(workspace, knowledge_config or KnowledgeConfig())
+            if isinstance(workspace, Path)
+            else None
+        )
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -132,9 +181,8 @@ class AgentLoop:
         self.thinking_language = thinking_language
         self.response_language = response_language
         self.enforce_response_language = enforce_response_language
-        self.archive_final_answer_as_wiki = archive_final_answer_as_wiki
         self.reset_session_after_answer = reset_session_after_answer
-        self.wiki_archive = WikiArchive(workspace) if archive_final_answer_as_wiki else None
+        self.model_settings = None
 
         self.context = ContextBuilder(
             workspace,
@@ -185,6 +233,17 @@ class AgentLoop:
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
 
+    def apply_model_settings(self, provider: LLMProvider, model: str) -> None:
+        """Apply a newly configured provider to future LLM calls."""
+        self.provider = provider
+        self.model = model
+        self.subagents.provider = provider
+        self.subagents.model = model
+        self.memory_consolidator.provider = provider
+        self.memory_consolidator.model = model
+        self.memory_consolidator.max_completion_tokens = provider.generation.max_tokens
+        logger.info("Runtime model settings applied: {}", model)
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
@@ -201,6 +260,28 @@ class AgentLoop:
             ))
         self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        if self.knowledge_service and self.knowledge_service.enabled:
+            self.tools.register(
+                KnowledgeIngestTool(
+                    self.knowledge_service,
+                    workspace=self.workspace,
+                    allowed_dir=allowed_dir,
+                )
+            )
+            self.tools.register(
+                KnowledgeSearchTool(
+                    self.knowledge_service,
+                    workspace=self.workspace,
+                    allowed_dir=allowed_dir,
+                )
+            )
+            self.tools.register(
+                KnowledgeStatusTool(
+                    self.knowledge_service,
+                    workspace=self.workspace,
+                    allowed_dir=allowed_dir,
+                )
+            )
         self.tools.register(MessageTool(
             send_callback=self.bus.publish_outbound,
             content_transform=self._normalize_user_facing_text,
@@ -717,7 +798,7 @@ class AgentLoop:
                 ))
 
     async def close_mcp(self) -> None:
-        """Drain pending background archives, then close MCP connections."""
+        """Drain pending background tasks, then close MCP connections."""
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
@@ -781,6 +862,37 @@ class AgentLoop:
             "- Final user-facing result should be concise, forensic, and written in Korean."
         )
 
+    @classmethod
+    def _should_auto_prepare_chrome_history(cls, msg: InboundMessage) -> bool:
+        """Detect Chrome/browser history investigation requests that should prepare RAG first."""
+        if msg.channel == "system":
+            return False
+        if (msg.metadata or {}).get("_background_task"):
+            return False
+
+        raw = msg.content.strip()
+        if not raw or raw.startswith("/"):
+            return False
+
+        lowered = raw.lower()
+        has_target = any(token in lowered for token in cls._AUTO_CHROME_HISTORY_TARGET_PATTERNS)
+        has_data = any(token in lowered for token in cls._AUTO_CHROME_HISTORY_DATA_PATTERNS)
+        has_intent = any(token in lowered for token in cls._AUTO_CHROME_HISTORY_INTENT_PATTERNS)
+        return has_target and has_data and has_intent
+
+    async def _auto_prepare_chrome_history(self, msg: InboundMessage) -> str | None:
+        """Discover and ingest Chrome History before the LLM answers."""
+        if not self.knowledge_service or not self.knowledge_service.enabled:
+            return None
+
+        metadata = msg.metadata or {}
+        result = await asyncio.to_thread(
+            self.knowledge_service.prepare_chrome_history,
+            case_name=metadata.get("case_name") or metadata.get("caseName"),
+            investigator_name=metadata.get("investigator_name") or metadata.get("investigatorName"),
+        )
+        return "Auto Chrome History preparation:\n" + self.knowledge_service.result_to_text(result)
+
     async def _process_message(
         self,
         msg: InboundMessage,
@@ -816,6 +928,7 @@ class AgentLoop:
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 current_role=current_role,
+                metadata=msg.metadata,
             )
             final_content, _, all_msgs = await self._run_agent_loop(
                 messages, channel=channel, chat_id=chat_id,
@@ -827,13 +940,6 @@ class AgentLoop:
             turn_skip = 1 + len(history)
             thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
             self._save_turn(session, all_msgs, turn_skip)
-            self._archive_final_answer(
-                session_key=key,
-                channel=channel,
-                chat_id=chat_id,
-                request=msg.content,
-                answer=final_content or "Background task completed.",
-            )
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
             meta = dict(msg.metadata or {})
@@ -864,6 +970,23 @@ class AgentLoop:
         ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         if result := await self.commands.dispatch(ctx):
             return result
+
+        if self._should_auto_prepare_chrome_history(msg):
+            progress_text = "Chrome History DB를 자동으로 찾고 RAG/Neo4j 전처리를 시작합니다."
+            if on_progress:
+                await on_progress(progress_text)
+            elif msg.channel == "webui":
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=progress_text,
+                        metadata={**(msg.metadata or {}), "_progress": True},
+                    )
+                )
+            auto_summary = await self._auto_prepare_chrome_history(msg)
+            if auto_summary:
+                msg.metadata = {**(msg.metadata or {}), "auto_knowledge_summary": auto_summary}
 
         if self._should_auto_background_large_log_task(msg):
             await self.subagents.spawn(
@@ -908,6 +1031,7 @@ class AgentLoop:
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
+            metadata=msg.metadata,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
@@ -936,13 +1060,6 @@ class AgentLoop:
         turn_skip = 1 + len(history)
         thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
         self._save_turn(session, all_msgs, turn_skip)
-        self._archive_final_answer(
-            session_key=key,
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            request=msg.content,
-            answer=final_content,
-        )
 
         if self.reset_session_after_answer:
             session.clear()
@@ -1075,30 +1192,6 @@ class AgentLoop:
                 seen.add(part)
 
         return ("\n\n".join(deduped) if deduped else None, blocks or None)
-
-    def _archive_final_answer(
-        self,
-        *,
-        session_key: str,
-        channel: str,
-        chat_id: str,
-        request: str,
-        answer: str,
-    ) -> None:
-        """Persist the final answer as a markdown wiki note when enabled."""
-        if not self.wiki_archive:
-            return
-        try:
-            entry = self.wiki_archive.save_final_answer(
-                session_key=session_key,
-                channel=channel,
-                chat_id=chat_id,
-                request=request,
-                answer=answer,
-            )
-            logger.info("Archived final answer for {} to {}", session_key, entry.path)
-        except Exception:
-            logger.exception("Failed to archive final answer for {}", session_key)
 
     async def process_direct(
         self,

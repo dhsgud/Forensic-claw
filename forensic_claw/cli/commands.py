@@ -435,42 +435,14 @@ def _make_provider(config: Config):
 
     Routing is driven by ``ProviderSpec.backend`` in the registry.
     """
-    from forensic_claw.providers.base import GenerationSettings
-    from forensic_claw.providers.registry import find_by_name
+    from forensic_claw.providers.factory import create_provider
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
-    spec = find_by_name(provider_name) if provider_name else None
-    backend = spec.backend if spec else "openai_compat"
-
-    # --- validation ---
-    if backend == "openai_compat":
-        needs_key = not (p and p.api_key)
-        exempt = spec and (spec.is_local or spec.is_direct)
-        if needs_key and not exempt:
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.forensic-claw/config.json under providers section")
-            raise typer.Exit(1)
-
-    # --- instantiation by backend ---
-    from forensic_claw.providers.openai_compat_provider import OpenAICompatProvider
-
-    provider = OpenAICompatProvider(
-        api_key=p.api_key if p else None,
-        api_base=config.get_api_base(model),
-        default_model=model,
-        extra_headers=p.extra_headers if p else None,
-        spec=spec,
-    )
-
-    defaults = config.agents.defaults
-    provider.generation = GenerationSettings(
-        temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
-        reasoning_effort=defaults.reasoning_effort,
-    )
-    return provider
+    try:
+        return create_provider(config)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        console.print("Set one in ~/.forensic-claw/config.json under providers section")
+        raise typer.Exit(1) from exc
 
 
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
@@ -539,9 +511,12 @@ def gateway(
     from forensic_claw.agent.loop import AgentLoop
     from forensic_claw.bus.queue import MessageBus
     from forensic_claw.channels.manager import ChannelManager
+    from forensic_claw.config.loader import get_config_path
     from forensic_claw.cron.service import CronService
     from forensic_claw.cron.types import CronJob
     from forensic_claw.heartbeat.service import HeartbeatService
+    from forensic_claw.runtime.knowledge_settings import RuntimeKnowledgeSettings
+    from forensic_claw.runtime.model_settings import RuntimeModelSettings
     from forensic_claw.session.manager import SessionManager
 
     if verbose:
@@ -581,12 +556,20 @@ def gateway(
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        knowledge_config=config.knowledge,
         timezone=config.agents.defaults.timezone,
         thinking_language=config.agents.defaults.thinking_language,
         response_language=config.agents.defaults.response_language,
         enforce_response_language=config.agents.defaults.enforce_response_language,
-        archive_final_answer_as_wiki=config.agents.defaults.archive_final_answer_as_wiki,
         reset_session_after_answer=config.agents.defaults.reset_session_after_answer,
+    )
+    model_settings = RuntimeModelSettings(config, config_path=get_config_path())
+    model_settings.add_apply_callback(agent.apply_model_settings)
+    agent.model_settings = model_settings
+    knowledge_settings = RuntimeKnowledgeSettings(
+        config,
+        config_path=get_config_path(),
+        service=agent.knowledge_service,
     )
 
     # Set cron callback (needs agent)
@@ -625,7 +608,7 @@ def gateway(
 
         if job.payload.deliver and job.payload.to and response:
             should_notify = await evaluate_response(
-                response, job.payload.message, provider, agent.model,
+                response, job.payload.message, agent.provider, agent.model,
             )
             if should_notify:
                 from forensic_claw.bus.events import OutboundMessage
@@ -638,7 +621,13 @@ def gateway(
     cron.on_job = on_cron_job
 
     # Create channel manager
-    channels = ChannelManager(config, bus, session_manager=session_manager)
+    channels = ChannelManager(
+        config,
+        bus,
+        session_manager=session_manager,
+        model_settings=model_settings,
+        knowledge_settings=knowledge_settings,
+    )
 
     def _pick_heartbeat_target() -> tuple[str, str]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
@@ -691,7 +680,7 @@ def gateway(
     hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
-        provider=provider,
+        provider=agent.provider,
         model=agent.model,
         on_execute=on_heartbeat_execute,
         on_notify=on_heartbeat_notify,
@@ -699,6 +688,12 @@ def gateway(
         enabled=hb_cfg.enabled,
         timezone=config.agents.defaults.timezone,
     )
+
+    def _apply_heartbeat_model(provider, model: str) -> None:
+        heartbeat.provider = provider
+        heartbeat.model = model
+
+    model_settings.add_apply_callback(_apply_heartbeat_model)
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
@@ -758,7 +753,9 @@ def agent(
 
     from forensic_claw.agent.loop import AgentLoop
     from forensic_claw.bus.queue import MessageBus
+    from forensic_claw.config.loader import get_config_path
     from forensic_claw.cron.service import CronService
+    from forensic_claw.runtime.model_settings import RuntimeModelSettings
 
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
@@ -793,13 +790,16 @@ def agent(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        knowledge_config=config.knowledge,
         timezone=config.agents.defaults.timezone,
         thinking_language=config.agents.defaults.thinking_language,
         response_language=config.agents.defaults.response_language,
         enforce_response_language=config.agents.defaults.enforce_response_language,
-        archive_final_answer_as_wiki=config.agents.defaults.archive_final_answer_as_wiki,
         reset_session_after_answer=config.agents.defaults.reset_session_after_answer,
     )
+    model_settings = RuntimeModelSettings(config, config_path=get_config_path())
+    model_settings.add_apply_callback(agent_loop.apply_model_settings)
+    agent_loop.model_settings = model_settings
 
     # Shared reference for progress callbacks
     _thinking: ThinkingSpinner | None = None

@@ -354,7 +354,12 @@ class TestProviderChannelInfo:
 
         names = _get_provider_names()
         assert isinstance(names, dict)
-        assert names == {"custom": "Custom (llama.cpp)", "vllm": "vLLM/Local"}
+        assert names == {
+            "custom": "Custom (llama.cpp)",
+            "vllm": "vLLM/Local",
+            "ollama": "Ollama",
+            "lmstudio": "LM Studio",
+        }
 
     def test_get_channel_names_returns_dict(self):
         from forensic_claw.cli.onboard import _get_channel_names
