@@ -1,0 +1,31 @@
+x-common-config: &common-config
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    - ~/.forensic-claw:/root/.forensic-claw
+
+services:
+  forensic-claw-gateway:
+    container_name: forensic-claw-gateway
+    <<: *common-config
+    command: ["gateway"]
+    restart: unless-stopped
+    ports:
+      - "18790:18790"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  forensic-claw-cli:
+    <<: *common-config
+    profiles:
+      - cli
+    command: ["status"]
+    stdin_open: true
+    tty: true

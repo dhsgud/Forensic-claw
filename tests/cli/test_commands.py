@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from forensic_claw.channels.kakaotalk import KakaoTalkConfig
 from forensic_claw.cli.commands import (
+    _apply_webui_runtime_overrides,
     _channel_effective_enabled,
     _make_provider,
     _resolve_session_scope,
@@ -148,6 +149,24 @@ def test_resolve_session_scope_adds_case_and_artifact_markers() -> None:
 def test_channel_effective_enabled_defaults_webui_to_enabled() -> None:
     assert _channel_effective_enabled("webui", None) is True
     assert _channel_effective_enabled("discord", None) is False
+
+
+def test_webui_runtime_overrides_enable_desktop_launcher_options() -> None:
+    config = Config()
+
+    _apply_webui_runtime_overrides(
+        config,
+        open_browser=True,
+        webui_host="127.0.0.1",
+        webui_port=8766,
+    )
+
+    assert config.channels.webui == {
+        "enabled": True,
+        "openBrowser": True,
+        "host": "127.0.0.1",
+        "port": 8766,
+    }
 
 
 def test_provider_login_is_unavailable() -> None:

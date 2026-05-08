@@ -40,5 +40,6 @@ uv.lock
 *.md
 !/README.md
 !/AGENTS.md
+!docs/**/*.md
 !forensic_claw/templates/**/*.md
 !forensic_claw/skills/**/*.md

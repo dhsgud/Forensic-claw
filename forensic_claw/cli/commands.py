@@ -32,6 +32,7 @@ from rich.table import Table
 from rich.text import Text
 
 from forensic_claw import __logo__, __version__
+from forensic_claw.cli.infra import infra_app
 from forensic_claw.cli.stream import StreamRenderer, ThinkingSpinner
 from forensic_claw.config.paths import get_workspace_path, is_default_workspace
 from forensic_claw.config.schema import Config
@@ -495,6 +496,37 @@ def _migrate_cron_store(config: "Config") -> None:
         shutil.move(str(legacy_path), str(new_path))
 
 
+def _apply_webui_runtime_overrides(
+    config: Config,
+    *,
+    open_browser: bool | None = None,
+    webui_host: str | None = None,
+    webui_port: int | None = None,
+) -> None:
+    """Apply desktop launcher overrides without requiring users to edit config JSON."""
+    section = getattr(config.channels, "webui", None)
+    if section is None:
+        webui: dict[str, Any] = {}
+    elif isinstance(section, dict):
+        webui = dict(section)
+    elif hasattr(section, "model_dump"):
+        webui = section.model_dump(mode="json", by_alias=True)
+    else:
+        webui = {}
+
+    if any(value is not None for value in (open_browser, webui_host, webui_port)):
+        webui["enabled"] = True
+    if open_browser is not None:
+        webui["openBrowser"] = open_browser
+    if webui_host:
+        webui["host"] = webui_host
+    if webui_port is not None:
+        webui["port"] = webui_port
+
+    if webui:
+        setattr(config.channels, "webui", webui)
+
+
 # ============================================================================
 # Gateway / Server
 # ============================================================================
@@ -506,6 +538,13 @@ def gateway(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    open_browser: bool | None = typer.Option(
+        None,
+        "--open-browser/--no-open-browser",
+        help="Open the local WebUI in the default browser",
+    ),
+    webui_host: str | None = typer.Option(None, "--webui-host", help="WebUI host override"),
+    webui_port: int | None = typer.Option(None, "--webui-port", help="WebUI port override"),
 ):
     """Start the forensic-claw gateway."""
     from forensic_claw.agent.loop import AgentLoop
@@ -524,6 +563,12 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     config = _load_runtime_config(config, workspace)
+    _apply_webui_runtime_overrides(
+        config,
+        open_browser=open_browser,
+        webui_host=webui_host,
+        webui_port=webui_port,
+    )
     port = port if port is not None else config.gateway.port
 
     console.print(f"{__logo__} Starting forensic-claw gateway version {__version__} on port {port}...")
@@ -1187,6 +1232,7 @@ def status():
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
+app.add_typer(infra_app, name="infra")
 
 
 _LOGIN_HANDLERS: dict[str, callable] = {}
