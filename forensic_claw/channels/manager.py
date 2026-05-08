@@ -32,10 +32,14 @@ class ChannelManager:
         config: Config,
         bus: MessageBus,
         session_manager: SessionManager | None = None,
+        model_settings: object | None = None,
+        knowledge_settings: object | None = None,
     ):
         self.config = config
         self.bus = bus
         self.session_manager = session_manager
+        self.model_settings = model_settings
+        self.knowledge_settings = knowledge_settings
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
 
@@ -61,7 +65,20 @@ class ChannelManager:
             try:
                 channel = cls(section, self.bus)
                 if hasattr(channel, "bind_runtime"):
-                    channel.bind_runtime(session_manager=self.session_manager)
+                    try:
+                        channel.bind_runtime(
+                            session_manager=self.session_manager,
+                            model_settings=getattr(self, "model_settings", None),
+                            knowledge_settings=getattr(self, "knowledge_settings", None),
+                        )
+                    except TypeError:
+                        try:
+                            channel.bind_runtime(
+                                session_manager=self.session_manager,
+                                model_settings=getattr(self, "model_settings", None),
+                            )
+                        except TypeError:
+                            channel.bind_runtime(session_manager=self.session_manager)
                 self.channels[name] = channel
                 logger.info("{} channel enabled", cls.display_name)
             except Exception as e:

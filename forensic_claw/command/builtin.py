@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ _BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec("/stop", "Stop the current task", kind="priority"),
     BuiltinCommandSpec("/restart", "Restart the bot", kind="priority"),
     BuiltinCommandSpec("/status", "Show bot status", kind="priority"),
+    BuiltinCommandSpec("/model", "Show or change the local model endpoint"),
+    BuiltinCommandSpec("/knowledge", "Show or prepare the local RAG and Neo4j evidence store"),
     BuiltinCommandSpec("/help", "Show available commands"),
 )
 
@@ -123,6 +126,185 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+def _format_model_status(snapshot: dict) -> str:
+    lines = [
+        "Model settings:",
+        f"- provider: {snapshot.get('provider') or 'unknown'}",
+        f"- model: {snapshot.get('model') or 'unknown'}",
+        f"- apiBase: {snapshot.get('apiBase') or 'unset'}",
+    ]
+    providers = snapshot.get("availableProviders") or []
+    if providers:
+        names = ", ".join(item["name"] for item in providers if item.get("name"))
+        lines.append(f"- available: {names}")
+    profiles = snapshot.get("profiles") or []
+    if profiles:
+        active = snapshot.get("activeProfile")
+        names = ", ".join(
+            f"{item['name']}*" if item.get("name") == active else item["name"]
+            for item in profiles
+            if item.get("name")
+        )
+        lines.append(f"- profiles: {names}")
+    return "\n".join(lines)
+
+
+async def cmd_model(ctx: CommandContext) -> OutboundMessage:
+    """Show or change the active runtime model endpoint."""
+    service = getattr(ctx.loop, "model_settings", None)
+    if service is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Model settings are not available in this process.",
+            metadata={"render_as": "text"},
+        )
+
+    args = ctx.args.strip()
+    if not args or args == "status":
+        content = _format_model_status(service.snapshot())
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={"render_as": "text"},
+        )
+
+    parts = args.split(maxsplit=2)
+    action = parts[0].lower()
+    try:
+        if action == "test":
+            api_base = parts[1] if len(parts) > 1 else None
+            result = await service.test_connection(api_base=api_base)
+            status = "ok" if result.get("ok") else "failed"
+            content = (
+                f"Model endpoint test {status}.\n"
+                f"- apiBase: {result.get('apiBase') or 'unset'}\n"
+                f"- status: {result.get('status') or 'n/a'}"
+            )
+            if result.get("error"):
+                content += f"\n- error: {result['error']}"
+            models = result.get("models") or []
+            if models:
+                content += "\n- models: " + ", ".join(models[:10])
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=content,
+                metadata={"render_as": "text"},
+            )
+
+        if action == "profile":
+            profile_parts = args.split(maxsplit=2)
+            profile_action = profile_parts[1].lower() if len(profile_parts) > 1 else "list"
+            if profile_action == "list":
+                content = _format_model_status(service.snapshot())
+            elif profile_action == "save" and len(profile_parts) >= 3:
+                snapshot = service.save_profile(profile_parts[2])
+                content = "Model profile saved.\n" + _format_model_status(snapshot)
+            elif profile_action == "use" and len(profile_parts) >= 3:
+                snapshot = await service.use_profile(profile_parts[2])
+                content = "Model profile applied.\n" + _format_model_status(snapshot)
+            else:
+                raise ValueError("Usage: /model profile list|save|use <name>")
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=content,
+                metadata={"render_as": "text"},
+            )
+
+        if action == "use" and len(parts) >= 2:
+            snapshot = await service.apply(provider=parts[1])
+            content = "Provider updated.\n" + _format_model_status(snapshot)
+        elif action == "set" and len(parts) >= 3:
+            key = parts[1].replace("-", "_").lower()
+            value = parts[2].strip()
+            if key in {"apibase", "api_base", "url"}:
+                snapshot = await service.apply(api_base=value, api_base_supplied=True)
+            elif key == "model":
+                snapshot = await service.apply(model=value)
+            elif key == "provider":
+                snapshot = await service.apply(provider=value)
+            else:
+                raise ValueError("Usage: /model set provider|model|apiBase <value>")
+            content = "Model settings updated.\n" + _format_model_status(snapshot)
+        else:
+            content = (
+                "Usage:\n"
+                "/model status\n"
+                "/model test [apiBase]\n"
+                "/model use <provider>\n"
+                "/model profile list|save|use <name>\n"
+                "/model set provider <provider>\n"
+                "/model set model <model>\n"
+                "/model set apiBase <url>"
+            )
+    except ValueError as exc:
+        content = f"Model settings error: {exc}"
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={"render_as": "text"},
+    )
+
+
+async def cmd_knowledge(ctx: CommandContext) -> OutboundMessage:
+    """Operate the local RAG and graph store."""
+    service = getattr(ctx.loop, "knowledge_service", None)
+    if service is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Knowledge service is not available in this process.",
+            metadata={"render_as": "text"},
+        )
+
+    args = ctx.args.strip()
+    if not args or args == "status":
+        content = service.status()
+    else:
+        action, _, rest = args.partition(" ")
+        action = action.lower()
+        if action == "ingest" and rest.strip():
+            result = await asyncio.to_thread(
+                service.ingest_path,
+                rest.strip(),
+                case_name=(ctx.msg.metadata or {}).get("case_name"),
+                investigator_name=(ctx.msg.metadata or {}).get("investigator_name"),
+            )
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=service.result_to_text(result),
+                metadata={"render_as": "text"},
+            )
+        if action == "search" and rest.strip():
+            content = service.search(rest.strip())
+        else:
+            text = (
+                "Usage:\n"
+                "/knowledge status\n"
+                "/knowledge ingest <path>\n"
+                "/knowledge search <query>"
+            )
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=text,
+                metadata={"render_as": "text"},
+            )
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=json.dumps(content, ensure_ascii=False, indent=2),
+        metadata={"render_as": "text"},
+    )
+
+
 def register_builtin_commands(router: CommandRouter) -> None:
     """Register the default set of slash commands."""
     router.priority("/stop", cmd_stop)
@@ -131,4 +313,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/new", cmd_new)
     router.exact("/reset", cmd_new)
     router.exact("/status", cmd_status)
+    router.exact("/model", cmd_model)
+    router.prefix("/model ", cmd_model)
+    router.exact("/knowledge", cmd_knowledge)
+    router.prefix("/knowledge ", cmd_knowledge)
     router.exact("/help", cmd_help)

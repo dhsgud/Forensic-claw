@@ -7,12 +7,72 @@
     <link rel="stylesheet" href="/ui/assets/styles.css">
   </head>
   <body>
-    <div class="shell">
+    <section id="setup-screen" class="setup-screen">
+      <form id="setup-form" class="setup-card">
+        <div>
+          <p class="eyebrow">Local WebUI Setup</p>
+          <h1>Forensic-Claw</h1>
+          <p class="subtle">케이스 정보와 Local LLM 연결을 먼저 설정하세요.</p>
+        </div>
+
+        <div class="setup-grid">
+          <label class="field">
+            <span>Case Name</span>
+            <input id="setup-case-name" type="text" placeholder="침해사고 초기 분석" required>
+          </label>
+          <label class="field">
+            <span>Investigator</span>
+            <input id="setup-investigator-name" type="text" placeholder="홍길동" required>
+          </label>
+          <label class="field">
+            <span>Provider</span>
+            <select id="setup-model-provider" required></select>
+          </label>
+          <label class="field">
+            <span>Model ID</span>
+            <input id="setup-model-id" type="text" placeholder="qwen2.5-coder-7b-instruct" required>
+          </label>
+          <label class="field setup-wide">
+            <span>API Base</span>
+            <input id="setup-model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1" required>
+          </label>
+          <label class="field check-field setup-wide">
+            <input id="setup-neo4j-enabled" type="checkbox" checked>
+            <span>Enable RAG + Neo4j Graph</span>
+          </label>
+          <label class="field setup-wide">
+            <span>Neo4j URI</span>
+            <input id="setup-neo4j-uri" type="text" placeholder="bolt://127.0.0.1:7687">
+          </label>
+          <label class="field">
+            <span>Neo4j Username</span>
+            <input id="setup-neo4j-username" type="text" placeholder="neo4j">
+          </label>
+          <label class="field">
+            <span>Neo4j Password</span>
+            <input id="setup-neo4j-password" type="password" autocomplete="new-password">
+          </label>
+          <label class="field setup-wide">
+            <span>Neo4j Database</span>
+            <input id="setup-neo4j-database" type="text" placeholder="neo4j">
+          </label>
+        </div>
+
+        <div class="setup-actions">
+          <button id="setup-test-model" class="ghost-button" type="button">Test LLM</button>
+          <button id="setup-test-neo4j" class="ghost-button" type="button">Test Neo4j</button>
+          <button id="setup-start" class="send-button" type="submit">Start Chat</button>
+        </div>
+        <p id="setup-status" class="subtle">Ollama, LM Studio, llama.cpp 등 OpenAI-compatible endpoint를 사용할 수 있습니다.</p>
+      </form>
+    </section>
+
+    <div id="app-shell" class="shell is-hidden">
       <aside class="sidebar">
         <div class="brand">
           <p class="eyebrow">Local WebUI</p>
           <h1>Forensic-Claw</h1>
-          <p class="subtle">case/artifact scope로 컨텍스트를 나누는 로컬 워크벤치</p>
+          <p class="subtle">케이스 시작 정보를 바탕으로 로컬 분석 채팅을 진행합니다.</p>
         </div>
 
         <section class="panel">
@@ -23,7 +83,79 @@
           <p id="session-meta" class="subtle">브라우저 세션을 준비하는 중입니다.</p>
         </section>
 
-        <section class="panel">
+        <section class="panel model-panel">
+          <div class="panel-title-row">
+            <h2>Model</h2>
+            <span id="model-status" class="badge">idle</span>
+          </div>
+          <label class="field">
+            <span>Provider</span>
+            <select id="model-provider"></select>
+          </label>
+          <label class="field">
+            <span>Model ID</span>
+            <input id="model-id" type="text" placeholder="qwen2.5-coder-7b-instruct">
+          </label>
+          <label class="field">
+            <span>API Base</span>
+            <input id="model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
+          </label>
+          <div class="button-row">
+            <button id="model-test" class="ghost-button" type="button">Test</button>
+            <button id="model-save" class="ghost-button" type="button">Apply</button>
+          </div>
+          <p id="model-summary" class="subtle">Runtime model endpoint is loading.</p>
+        </section>
+
+        <section class="panel knowledge-panel">
+          <div class="panel-title-row">
+            <h2>Knowledge</h2>
+            <span id="knowledge-status" class="badge">idle</span>
+          </div>
+          <label class="field check-field">
+            <input id="knowledge-enabled" type="checkbox">
+            <span>Enable local RAG</span>
+          </label>
+          <label class="field">
+            <span>Store Directory</span>
+            <input id="knowledge-store-dir" type="text" placeholder="knowledge">
+          </label>
+          <label class="field check-field">
+            <input id="neo4j-enabled" type="checkbox">
+            <span>Sync to Neo4j</span>
+          </label>
+          <label class="field">
+            <span>Neo4j URI</span>
+            <input id="neo4j-uri" type="text" placeholder="bolt://127.0.0.1:7687">
+          </label>
+          <label class="field">
+            <span>Username</span>
+            <input id="neo4j-username" type="text" placeholder="neo4j">
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input id="neo4j-password" type="password" autocomplete="new-password">
+          </label>
+          <label class="field">
+            <span>Database</span>
+            <input id="neo4j-database" type="text" placeholder="neo4j">
+          </label>
+          <div class="button-row">
+            <button id="knowledge-test" class="ghost-button" type="button">Test</button>
+            <button id="knowledge-save" class="ghost-button" type="button">Apply</button>
+          </div>
+          <p id="knowledge-summary" class="subtle">Knowledge and Neo4j settings are loading.</p>
+        </section>
+
+        <section class="panel sessions-panel">
+          <div class="panel-title-row">
+            <h2>Recent Sessions</h2>
+            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div id="sessions-list" class="session-list"></div>
+        </section>
+
+        <section class="panel case-scope-panel" hidden>
           <div class="panel-title-row">
             <h2>Scope</h2>
             <button id="clear-scope" class="ghost-button" type="button">Clear</button>
@@ -36,32 +168,23 @@
             <span>Artifact ID</span>
             <input id="artifact-id" type="text" placeholder="EVD-001" list="artifact-suggestions">
           </label>
-          <p id="scope-summary" class="subtle">기본 브라우저 세션에 연결됩니다.</p>
-          <p class="subtle hint-line">`Enter` 전송 · `Shift+Enter` 줄바꿈</p>
+          <p id="scope-summary" class="subtle">기본 브라우저 세션에 연결합니다.</p>
         </section>
 
-        <section class="panel cases-panel">
+        <section class="panel cases-panel" hidden>
           <div class="panel-title-row">
             <h2>Cases</h2>
             <button id="refresh-cases" class="ghost-button" type="button">Refresh</button>
           </div>
           <div id="cases-list" class="session-list"></div>
         </section>
-
-        <section class="panel sessions-panel">
-          <div class="panel-title-row">
-            <h2>Recent Sessions</h2>
-            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
-          </div>
-          <div id="sessions-list" class="session-list"></div>
-        </section>
       </aside>
 
       <main class="workspace">
         <header class="workspace-header">
           <div>
-            <p class="eyebrow">Scoped Chat</p>
-            <h2 id="active-session-title">새 대화</h2>
+            <p class="eyebrow">Local Chat</p>
+            <h2 id="active-session-title">새 브라우저 세션</h2>
           </div>
           <div class="header-status">
             <span id="connection-status" class="status-pill">offline</span>
@@ -69,7 +192,7 @@
           </div>
         </header>
 
-        <section class="workspace-body">
+        <section class="workspace-body no-inspector">
           <section id="chat-log" class="chat-log"></section>
 
           <aside class="inspector">
@@ -86,7 +209,7 @@
               </details>
             </section>
 
-            <section class="panel inspector-panel">
+            <section class="panel inspector-panel case-inspector-panel" hidden>
               <div class="panel-title-row">
                 <h2>Case Explorer</h2>
                 <span id="case-detail-status" class="badge">idle</span>
@@ -96,17 +219,6 @@
               <div id="artifact-detail" class="detail-stack"></div>
             </section>
 
-            <section class="panel inspector-panel">
-              <div class="panel-title-row">
-                <h2>Wiki Notes</h2>
-                <button id="refresh-wiki" class="ghost-button" type="button">Refresh</button>
-              </div>
-              <p id="wiki-summary" class="subtle">현재 scope에 저장된 note를 보여줍니다.</p>
-              <div id="wiki-list" class="note-list"></div>
-              <article id="wiki-preview" class="note-preview">
-                <div class="empty-state">저장된 wiki note를 선택하면 여기서 본문을 볼 수 있습니다.</div>
-              </article>
-            </section>
           </aside>
         </section>
 

@@ -67,7 +67,6 @@ class AgentDefaults(Base):
     thinking_language: str = "en"
     response_language: str = "ko"
     enforce_response_language: bool = True
-    archive_final_answer_as_wiki: bool = False
     reset_session_after_answer: bool = False
 
 
@@ -95,6 +94,28 @@ class ProvidersConfig(Base):
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
+    ollama: ProviderConfig = Field(default_factory=ProviderConfig)
+    lmstudio: ProviderConfig = Field(default_factory=ProviderConfig)
+
+
+class ModelProfile(Base):
+    """Named local model endpoint profile."""
+
+    provider: str = "custom"
+    model: str = ""
+    api_base: str | None = None
+
+    @field_validator("api_base", mode="before")
+    @classmethod
+    def _normalize_api_base(cls, value: str | None) -> str | None:
+        return normalize_openai_api_base(value)
+
+
+class ModelsConfig(Base):
+    """Named model endpoint profiles."""
+
+    active_profile: str = ""
+    profiles: dict[str, ModelProfile] = Field(default_factory=dict)
 
 
 class HeartbeatConfig(Base):
@@ -150,6 +171,28 @@ class MCPServerConfig(Base):
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class Neo4jConfig(Base):
+    """Neo4j graph synchronization settings."""
+
+    enabled: bool = True
+    uri: str = "bolt://127.0.0.1:7687"
+    username: str = "neo4j"
+    password: str = ""
+    database: str = "neo4j"
+
+
+class KnowledgeConfig(Base):
+    """Local RAG and graph ingestion settings."""
+
+    enabled: bool = True
+    store_dir: str = "knowledge"
+    chunk_chars: int = Field(default=6000, ge=1000, le=50_000)
+    chunk_overlap_chars: int = Field(default=400, ge=0, le=5000)
+    max_file_bytes: int = Field(default=256 * 1024 * 1024, ge=1024)
+    max_chrome_rows: int = Field(default=10_000, ge=1)
+    neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -165,8 +208,10 @@ class Config(BaseSettings):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
 
     @property
     def workspace_path(self) -> Path:

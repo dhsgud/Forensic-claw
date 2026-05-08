@@ -52,13 +52,34 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_local=True,
         default_api_base="http://localhost:8000/v1",
     ),
+    ProviderSpec(
+        name="ollama",
+        keywords=("ollama",),
+        env_key="",
+        display_name="Ollama",
+        backend="openai_compat",
+        is_local=True,
+        default_api_base="http://127.0.0.1:11434/v1",
+        strip_model_prefix=True,
+    ),
+    ProviderSpec(
+        name="lmstudio",
+        keywords=("lmstudio", "lm-studio", "lm studio"),
+        env_key="",
+        display_name="LM Studio",
+        backend="openai_compat",
+        is_local=True,
+        default_api_base="http://127.0.0.1:1234/v1",
+        strip_model_prefix=True,
+    ),
 )
 
 
 def find_by_name(name: str) -> ProviderSpec | None:
     """Find a provider spec by config field name."""
     normalized = to_snake(name.replace("-", "_"))
+    compact = normalized.replace("_", "")
     for spec in PROVIDERS:
-        if spec.name == normalized:
+        if spec.name == normalized or spec.name.replace("_", "") == compact:
             return spec
     return None

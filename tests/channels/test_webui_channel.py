@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -33,6 +32,94 @@ async def _make_client(tmp_path: Path) -> tuple[WebUIChannel, MessageBus, Sessio
     client = TestClient(TestServer(channel.create_app()))
     await client.start_server()
     return channel, bus, session_manager, client
+
+
+class FakeModelSettings:
+    def __init__(self) -> None:
+        self.applied: list[dict] = []
+        self.tested: list[dict] = []
+        self._snapshot = {
+            "provider": "custom",
+            "providerLabel": "Custom",
+            "model": "local-model",
+            "apiBase": "http://127.0.0.1:1234/v1",
+            "availableProviders": [{"name": "custom", "label": "Custom", "defaultApiBase": ""}],
+        }
+
+    def snapshot(self) -> dict:
+        return dict(self._snapshot)
+
+    async def apply(self, **kwargs) -> dict:
+        self.applied.append(kwargs)
+        if kwargs.get("provider"):
+            self._snapshot["provider"] = kwargs["provider"]
+        if kwargs.get("model"):
+            self._snapshot["model"] = kwargs["model"]
+        if kwargs.get("api_base") is not None:
+            self._snapshot["apiBase"] = kwargs["api_base"]
+        return self.snapshot()
+
+    async def test_connection(self, **kwargs) -> dict:
+        self.tested.append(kwargs)
+        return {
+            "ok": True,
+            "apiBase": kwargs.get("api_base") or self._snapshot["apiBase"],
+            "status": 200,
+            "models": [self._snapshot["model"]],
+        }
+
+
+class FakeKnowledgeSettings:
+    def __init__(self) -> None:
+        self.applied: list[dict] = []
+        self.tested: list[dict] = []
+        self._snapshot = {
+            "enabled": True,
+            "storeDir": "knowledge",
+            "chunkChars": 6000,
+            "chunkOverlapChars": 400,
+            "maxFileBytes": 268435456,
+            "maxChromeRows": 10000,
+            "neo4j": {
+                "enabled": True,
+                "uri": "bolt://127.0.0.1:7687",
+                "username": "neo4j",
+                "database": "neo4j",
+                "passwordConfigured": False,
+                "status": {"enabled": True, "state": "unavailable"},
+            },
+        }
+
+    def snapshot(self) -> dict:
+        return json.loads(json.dumps(self._snapshot))
+
+    def apply(self, **kwargs) -> dict:
+        self.applied.append(kwargs)
+        if kwargs.get("enabled") is not None:
+            self._snapshot["enabled"] = kwargs["enabled"]
+        if kwargs.get("store_dir") is not None:
+            self._snapshot["storeDir"] = kwargs["store_dir"]
+        neo4j = self._snapshot["neo4j"]
+        if kwargs.get("neo4j_enabled") is not None:
+            neo4j["enabled"] = kwargs["neo4j_enabled"]
+        if kwargs.get("uri") is not None:
+            neo4j["uri"] = kwargs["uri"]
+        if kwargs.get("username") is not None:
+            neo4j["username"] = kwargs["username"]
+        if kwargs.get("database") is not None:
+            neo4j["database"] = kwargs["database"]
+        if kwargs.get("password_supplied"):
+            neo4j["passwordConfigured"] = bool(kwargs.get("password"))
+        neo4j["status"] = {"enabled": neo4j["enabled"], "state": "connected", "uri": neo4j["uri"]}
+        return self.snapshot()
+
+    def test_connection(self, **kwargs) -> dict:
+        self.tested.append(kwargs)
+        return {
+            "enabled": kwargs.get("enabled"),
+            "state": "connected",
+            "uri": kwargs.get("uri") or self._snapshot["neo4j"]["uri"],
+        }
 
 
 def _write_case_fixture(workspace: Path) -> None:
@@ -77,28 +164,144 @@ def _write_case_fixture(workspace: Path) -> None:
     )
     (case_dir / "sources" / "SRC-001" / "raw" / "Security.evtx").write_text("EVTXDATA", encoding="utf-8")
 
-    wiki_dir = workspace / "wiki" / "cases" / "case-2026-0001" / "artifacts" / "EVD-001"
-    wiki_dir.mkdir(parents=True, exist_ok=True)
-    (wiki_dir / "20260410-prefetch.md").write_text(
-        "\n".join(
-            [
-                "---",
-                'title: "Prefetch Summary"',
-                'created_at: "2026-04-10T12:00:00+09:00"',
-                'case_id: "case-2026-0001"',
-                'artifact_id: "EVD-001"',
-                "---",
-                "",
-                "# Prefetch Summary",
-                "",
-                "## Final Answer",
-                "",
-                "실행 흔적을 정리한 note입니다.",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+
+@pytest.mark.asyncio
+async def test_webui_model_config_api_returns_and_updates_runtime_settings(tmp_path: Path) -> None:
+    bus = MessageBus()
+    channel = WebUIChannel(
+        {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 8765,
+            "allowFrom": ["*"],
+        },
+        bus,
     )
+    model_settings = FakeModelSettings()
+    channel.bind_runtime(
+        session_manager=SessionManager(tmp_path),
+        model_settings=model_settings,
+    )
+    client = TestClient(TestServer(channel.create_app()))
+    await client.start_server()
+
+    try:
+        response = await client.get("/api/model-config")
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["modelConfig"]["apiBase"] == "http://127.0.0.1:1234/v1"
+
+        response = await client.patch(
+            "/api/model-config",
+            json={
+                "provider": "custom",
+                "model": "other-local-model",
+                "apiBase": "http://127.0.0.1:11434/v1",
+            },
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["ok"] is True
+        assert payload["modelConfig"]["model"] == "other-local-model"
+        assert model_settings.applied == [
+            {
+                "provider": "custom",
+                "model": "other-local-model",
+                "api_base": "http://127.0.0.1:11434/v1",
+                "api_base_supplied": True,
+            }
+        ]
+
+        response = await client.post(
+            "/api/model-config/test",
+            json={"apiBase": "http://127.0.0.1:11434/v1"},
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["ok"] is True
+        assert payload["result"]["models"] == ["other-local-model"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_settings(
+    tmp_path: Path,
+) -> None:
+    bus = MessageBus()
+    channel = WebUIChannel(
+        {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 8765,
+            "allowFrom": ["*"],
+        },
+        bus,
+    )
+    knowledge_settings = FakeKnowledgeSettings()
+    channel.bind_runtime(
+        session_manager=SessionManager(tmp_path),
+        knowledge_settings=knowledge_settings,
+    )
+    client = TestClient(TestServer(channel.create_app()))
+    await client.start_server()
+
+    try:
+        response = await client.get("/api/knowledge-config")
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["knowledgeConfig"]["neo4j"]["uri"] == "bolt://127.0.0.1:7687"
+
+        response = await client.patch(
+            "/api/knowledge-config",
+            json={
+                "enabled": True,
+                "storeDir": "knowledge-live",
+                "neo4jEnabled": True,
+                "uri": "bolt://127.0.0.1:7688",
+                "username": "neo4j",
+                "password": "secret",
+                "database": "forensic",
+            },
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["ok"] is True
+        assert payload["knowledgeConfig"]["storeDir"] == "knowledge-live"
+        assert payload["knowledgeConfig"]["neo4j"]["passwordConfigured"] is True
+        assert knowledge_settings.applied == [
+            {
+                "enabled": True,
+                "store_dir": "knowledge-live",
+                "neo4j_enabled": True,
+                "uri": "bolt://127.0.0.1:7688",
+                "username": "neo4j",
+                "password": "secret",
+                "password_supplied": True,
+                "database": "forensic",
+            }
+        ]
+
+        response = await client.post(
+            "/api/knowledge-config/test",
+            json={"neo4jEnabled": True, "uri": "bolt://127.0.0.1:7688"},
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["ok"] is True
+        assert payload["result"]["state"] == "connected"
+        assert knowledge_settings.tested == [
+            {
+                "enabled": True,
+                "uri": "bolt://127.0.0.1:7688",
+                "username": None,
+                "password": None,
+                "password_supplied": False,
+                "database": None,
+            }
+        ]
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -120,6 +323,8 @@ async def test_webui_bootstrap_and_chat_publish_scoped_inbound(tmp_path: Path) -
                 "sessionId": session_id,
                 "caseId": "Case Alpha",
                 "artifactId": "Prefetch #1",
+                "caseName": "Case Alpha",
+                "investigatorName": "Investigator One",
                 "text": "분석 시작",
             },
         )
@@ -131,6 +336,8 @@ async def test_webui_bootstrap_and_chat_publish_scoped_inbound(tmp_path: Path) -
         assert inbound.chat_id == session_id
         assert inbound.metadata["case_id"] == "Case Alpha"
         assert inbound.metadata["artifact_id"] == "Prefetch #1"
+        assert inbound.metadata["case_name"] == "Case Alpha"
+        assert inbound.metadata["investigator_name"] == "Investigator One"
         assert inbound.session_key == f"webui:{session_id}:case:Case-Alpha:artifact:Prefetch-1"
         assert channel.supports_streaming is True
     finally:
@@ -152,6 +359,8 @@ async def test_webui_stop_publishes_priority_message_for_scoped_session(tmp_path
                 "sessionId": session_id,
                 "caseId": "Case Alpha",
                 "artifactId": "Prefetch #1",
+                "caseName": "Case Alpha",
+                "investigatorName": "Investigator One",
             },
         )
         assert response.status == 200
@@ -385,14 +594,15 @@ async def test_webui_sessions_api_filters_to_browser_session(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_webui_case_and_wiki_read_only_apis(tmp_path: Path) -> None:
+async def test_webui_case_read_only_apis_return_case_artifacts_when_workspace_has_case(
+    tmp_path: Path,
+) -> None:
     _write_case_fixture(tmp_path)
     _channel, _bus, _session_manager, client = await _make_client(tmp_path)
 
     try:
         bootstrap = await (await client.get("/api/bootstrap")).json()
         assert bootstrap["workspace"]["hasCases"] is True
-        assert bootstrap["workspace"]["hasWiki"] is True
 
         response = await client.get("/api/cases")
         assert response.status == 200
@@ -424,32 +634,16 @@ async def test_webui_case_and_wiki_read_only_apis(tmp_path: Path) -> None:
         assert source["metadata"]["origin"] == "Security.evtx"
         assert source["files"] == ["Security.evtx"]
 
-        response = await client.get(
-            "/api/wiki",
-            params={"sessionId": "browser-a", "caseId": "case-2026-0001", "artifactId": "EVD-001"},
-        )
-        notes = await response.json()
-        assert notes["notes"][0]["title"] == "Prefetch Summary"
-
-        note_id = notes["notes"][0]["id"]
-        response = await client.get(f"/api/wiki/{quote(note_id, safe='')}")
-        note = await response.json()
-        assert note["note"]["metadata"]["artifact_id"] == "EVD-001"
-        assert "실행 흔적을 정리한 note입니다." in note["note"]["content"]
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_webui_rejects_note_traversal_and_missing_case(tmp_path: Path) -> None:
+async def test_webui_rejects_missing_case_and_evidence_traversal(tmp_path: Path) -> None:
     _channel, _bus, _session_manager, client = await _make_client(tmp_path)
 
     try:
         response = await client.get("/api/cases/missing-case")
-        assert response.status == 404
-
-        bad_note_id = base64.urlsafe_b64encode(b"../outside.md").decode("ascii").rstrip("=")
-        response = await client.get(f"/api/wiki/{quote(bad_note_id, safe='')}")
         assert response.status == 404
 
         response = await client.get("/api/cases/case-1/evidence/..")

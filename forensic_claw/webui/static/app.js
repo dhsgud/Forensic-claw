@@ -9,7 +9,6 @@ const state = {
   cases: [],
   commands: [],
   activeCase: null,
-  activeWikiNoteId: null,
   shellTraces: [],
   shellTraceMap: new Map(),
   slashSelection: 0,
@@ -18,8 +17,32 @@ const state = {
   isStopping: false,
   stopRequested: false,
   stopTargetSessionKey: null,
+  modelConfig: null,
+  isApplyingModel: false,
+  knowledgeConfig: null,
+  isApplyingKnowledge: false,
+  caseProfile: null,
 };
 
+const SETUP_STORAGE_KEY = "forensic_claw_webui_setup_v1";
+
+const setupScreen = document.querySelector("#setup-screen");
+const appShell = document.querySelector("#app-shell");
+const setupForm = document.querySelector("#setup-form");
+const setupCaseName = document.querySelector("#setup-case-name");
+const setupInvestigatorName = document.querySelector("#setup-investigator-name");
+const setupProvider = document.querySelector("#setup-model-provider");
+const setupModelId = document.querySelector("#setup-model-id");
+const setupApiBase = document.querySelector("#setup-model-api-base");
+const setupNeo4jEnabled = document.querySelector("#setup-neo4j-enabled");
+const setupNeo4jUri = document.querySelector("#setup-neo4j-uri");
+const setupNeo4jUsername = document.querySelector("#setup-neo4j-username");
+const setupNeo4jPassword = document.querySelector("#setup-neo4j-password");
+const setupNeo4jDatabase = document.querySelector("#setup-neo4j-database");
+const setupTestModel = document.querySelector("#setup-test-model");
+const setupTestNeo4j = document.querySelector("#setup-test-neo4j");
+const setupStart = document.querySelector("#setup-start");
+const setupStatus = document.querySelector("#setup-status");
 const sessionBadge = document.querySelector("#session-badge");
 const sessionMeta = document.querySelector("#session-meta");
 const scopeSummary = document.querySelector("#scope-summary");
@@ -45,14 +68,27 @@ const caseDetailStatus = document.querySelector("#case-detail-status");
 const shellTraceCount = document.querySelector("#shell-trace-count");
 const shellTraceSummary = document.querySelector("#shell-trace-summary");
 const shellTraceList = document.querySelector("#shell-trace-list");
-const wikiSummary = document.querySelector("#wiki-summary");
-const wikiList = document.querySelector("#wiki-list");
-const wikiPreview = document.querySelector("#wiki-preview");
+const modelStatus = document.querySelector("#model-status");
+const modelProvider = document.querySelector("#model-provider");
+const modelId = document.querySelector("#model-id");
+const modelApiBase = document.querySelector("#model-api-base");
+const modelTest = document.querySelector("#model-test");
+const modelSave = document.querySelector("#model-save");
+const modelSummary = document.querySelector("#model-summary");
+const knowledgeStatus = document.querySelector("#knowledge-status");
+const knowledgeEnabled = document.querySelector("#knowledge-enabled");
+const knowledgeStoreDir = document.querySelector("#knowledge-store-dir");
+const neo4jEnabled = document.querySelector("#neo4j-enabled");
+const neo4jUri = document.querySelector("#neo4j-uri");
+const neo4jUsername = document.querySelector("#neo4j-username");
+const neo4jPassword = document.querySelector("#neo4j-password");
+const neo4jDatabase = document.querySelector("#neo4j-database");
+const knowledgeTest = document.querySelector("#knowledge-test");
+const knowledgeSave = document.querySelector("#knowledge-save");
+const knowledgeSummary = document.querySelector("#knowledge-summary");
 
 function currentScope() {
-  const caseId = caseIdInput.value.trim();
-  const artifactId = artifactIdInput.value.trim();
-  return { caseId, artifactId };
+  return { caseId: "", artifactId: "" };
 }
 
 function scopeLabel({ caseId, artifactId }) {
@@ -60,6 +96,281 @@ function scopeLabel({ caseId, artifactId }) {
   if (caseId) return caseId;
   if (artifactId) return artifactId;
   return "base";
+}
+
+function setModelStatus(text, kind = "") {
+  if (!modelStatus) return;
+  modelStatus.textContent = text;
+  modelStatus.classList.toggle("success", kind === "success");
+  modelStatus.classList.toggle("warn", kind === "warn");
+}
+
+function currentModelForm() {
+  return {
+    provider: modelProvider?.value || "",
+    model: modelId?.value.trim() || "",
+    apiBase: modelApiBase?.value.trim() || "",
+  };
+}
+
+function renderModelConfig(config) {
+  state.modelConfig = config || null;
+  if (!modelProvider || !modelId || !modelApiBase || !modelSummary) return;
+  if (!config) {
+    setModelStatus("offline", "warn");
+    modelSummary.textContent = "Model settings are unavailable.";
+    return;
+  }
+
+  const providers = config.availableProviders || [];
+  modelProvider.innerHTML = "";
+  for (const provider of providers) {
+    const option = document.createElement("option");
+    option.value = provider.name;
+    option.textContent = provider.label || provider.name;
+    option.dataset.defaultApiBase = provider.defaultApiBase || "";
+    modelProvider.appendChild(option);
+  }
+  modelProvider.value = config.provider || providers[0]?.name || "";
+  modelId.value = config.model || "";
+  modelApiBase.value = config.apiBase || "";
+  modelSummary.textContent = `${config.providerLabel || config.provider || "provider"} - ${config.model || "model"} - ${config.apiBase || "apiBase unset"}`;
+  setModelStatus("ready", "success");
+}
+
+function syncDefaultApiBaseFromProvider() {
+  if (!modelProvider || !modelApiBase) return;
+  const option = modelProvider.selectedOptions[0];
+  const current = modelApiBase.value.trim();
+  const previous = state.modelConfig?.apiBase || "";
+  if ((!current || current === previous) && option?.dataset.defaultApiBase) {
+    modelApiBase.value = option.dataset.defaultApiBase;
+  }
+}
+
+function setKnowledgeStatus(text, kind = "") {
+  if (!knowledgeStatus) return;
+  knowledgeStatus.textContent = text;
+  knowledgeStatus.classList.toggle("success", kind === "success");
+  knowledgeStatus.classList.toggle("warn", kind === "warn");
+}
+
+function knowledgePayloadFromFields(fields) {
+  const payload = {
+    enabled: Boolean(fields.knowledgeEnabled?.checked),
+    storeDir: fields.storeDir?.value.trim() || "knowledge",
+    neo4jEnabled: Boolean(fields.neo4jEnabled?.checked),
+    uri: fields.uri?.value.trim() || "",
+    username: fields.username?.value.trim() || "",
+    database: fields.database?.value.trim() || "neo4j",
+  };
+  const password = fields.password?.value || "";
+  if (password) {
+    payload.password = password;
+  }
+  return payload;
+}
+
+function currentKnowledgeForm() {
+  return knowledgePayloadFromFields({
+    knowledgeEnabled,
+    storeDir: knowledgeStoreDir,
+    neo4jEnabled,
+    uri: neo4jUri,
+    username: neo4jUsername,
+    password: neo4jPassword,
+    database: neo4jDatabase,
+  });
+}
+
+function setupKnowledgeFormPayload() {
+  return knowledgePayloadFromFields({
+    knowledgeEnabled: { checked: true },
+    storeDir: { value: state.knowledgeConfig?.storeDir || "knowledge" },
+    neo4jEnabled: setupNeo4jEnabled,
+    uri: setupNeo4jUri,
+    username: setupNeo4jUsername,
+    password: setupNeo4jPassword,
+    database: setupNeo4jDatabase,
+  });
+}
+
+function renderKnowledgeConfig(config) {
+  state.knowledgeConfig = config || null;
+  if (!knowledgeEnabled || !knowledgeStoreDir || !neo4jEnabled || !neo4jUri || !knowledgeSummary) return;
+  if (!config) {
+    setKnowledgeStatus("offline", "warn");
+    knowledgeSummary.textContent = "Knowledge settings are unavailable.";
+    return;
+  }
+
+  const neo4j = config.neo4j || {};
+  const neo4jStatus = neo4j.status || {};
+  knowledgeEnabled.checked = Boolean(config.enabled);
+  knowledgeStoreDir.value = config.storeDir || "knowledge";
+  neo4jEnabled.checked = Boolean(neo4j.enabled);
+  neo4jUri.value = neo4j.uri || "";
+  neo4jUsername.value = neo4j.username || "";
+  neo4jDatabase.value = neo4j.database || "neo4j";
+  if (neo4jPassword) {
+    neo4jPassword.value = "";
+    neo4jPassword.placeholder = neo4j.passwordConfigured ? "Saved password configured" : "";
+  }
+
+  const stateText = neo4j.enabled ? (neo4jStatus.state || "not tested") : "disabled";
+  const badgeKind = stateText === "connected" ? "success" : stateText === "disabled" ? "" : "warn";
+  setKnowledgeStatus(stateText, badgeKind);
+  knowledgeSummary.textContent = `RAG ${config.enabled ? "enabled" : "disabled"} - ${config.storeDir || "knowledge"} - Neo4j ${stateText}`;
+}
+
+function renderSetupKnowledgeConfig(config) {
+  if (!setupNeo4jEnabled || !setupNeo4jUri || !setupNeo4jUsername || !setupNeo4jDatabase) return;
+  const neo4j = config?.neo4j || {};
+  setupNeo4jEnabled.checked = Boolean(neo4j.enabled ?? true);
+  setupNeo4jUri.value = neo4j.uri || "bolt://127.0.0.1:7687";
+  setupNeo4jUsername.value = neo4j.username || "neo4j";
+  setupNeo4jDatabase.value = neo4j.database || "neo4j";
+  if (setupNeo4jPassword) {
+    setupNeo4jPassword.value = "";
+    setupNeo4jPassword.placeholder = neo4j.passwordConfigured ? "Saved password configured" : "";
+  }
+}
+
+function getStoredSetup() {
+  try {
+    const raw = window.localStorage.getItem(SETUP_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed?.caseName || !parsed?.investigatorName) {
+      return null;
+    }
+    return parsed;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function persistSetup(profile) {
+  window.localStorage.setItem(SETUP_STORAGE_KEY, JSON.stringify(profile));
+  state.caseProfile = profile;
+}
+
+function applySetupVisibility() {
+  const ready = Boolean(state.caseProfile);
+  setupScreen?.classList.toggle("is-hidden", ready);
+  appShell?.classList.toggle("is-hidden", !ready);
+  messageInput.disabled = !ready;
+  sendButton.disabled = !ready || !state.sessionId || state.isStopping;
+  if (state.caseProfile) {
+    activeScope.textContent = state.caseProfile.caseName;
+    sessionMeta.textContent = `${state.caseProfile.caseName} - ${state.caseProfile.investigatorName}`;
+  }
+}
+
+function setupModelFormPayload() {
+  return {
+    provider: setupProvider?.value || "",
+    model: setupModelId?.value.trim() || "",
+    apiBase: setupApiBase?.value.trim() || "",
+  };
+}
+
+function renderSetupModelConfig(config) {
+  if (!setupProvider || !setupModelId || !setupApiBase) return;
+  const providers = config?.availableProviders || [];
+  setupProvider.innerHTML = "";
+  for (const provider of providers) {
+    const option = document.createElement("option");
+    option.value = provider.name;
+    option.textContent = provider.label || provider.name;
+    option.dataset.defaultApiBase = provider.defaultApiBase || "";
+    setupProvider.appendChild(option);
+  }
+  setupProvider.value = config?.provider || providers[0]?.name || "";
+  setupModelId.value = config?.model || "";
+  setupApiBase.value = config?.apiBase || "";
+
+  const stored = getStoredSetup();
+  if (stored) {
+    setupCaseName.value = stored.caseName || "";
+    setupInvestigatorName.value = stored.investigatorName || "";
+  }
+}
+
+function syncSetupDefaultApiBaseFromProvider() {
+  if (!setupProvider || !setupApiBase) return;
+  const option = setupProvider.selectedOptions[0];
+  if (option?.dataset.defaultApiBase) {
+    setupApiBase.value = option.dataset.defaultApiBase;
+  }
+}
+
+async function testSetupModelConfig() {
+  setupStatus.textContent = "LLM endpoint를 확인하는 중입니다.";
+  const data = await apiJson("/api/model-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(setupModelFormPayload()),
+  });
+  const result = data.result || {};
+  setupStatus.textContent = result.ok
+    ? `연결되었습니다. ${result.models?.length ? result.models.slice(0, 3).join(", ") : "Endpoint responded."}`
+    : `연결 실패: ${result.error || "응답을 받지 못했습니다."}`;
+}
+
+async function testSetupKnowledgeConfig() {
+  setupStatus.textContent = "Neo4j 연결을 확인하는 중입니다.";
+  const data = await apiJson("/api/knowledge-config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(setupKnowledgeFormPayload()),
+  });
+  const result = data.result || {};
+  const stateText = result.state || "unknown";
+  setupStatus.textContent = data.ok
+    ? `Neo4j 상태: ${stateText}`
+    : `Neo4j 연결 실패: ${result.error || stateText}`;
+}
+
+async function completeInitialSetup(event) {
+  event.preventDefault();
+  const caseName = setupCaseName.value.trim();
+  const investigatorName = setupInvestigatorName.value.trim();
+  const modelPayload = setupModelFormPayload();
+  const knowledgePayload = setupKnowledgeFormPayload();
+  if (!caseName || !investigatorName || !modelPayload.provider || !modelPayload.model || !modelPayload.apiBase) {
+    setupStatus.textContent = "케이스 이름, 수사관 이름, Local LLM 설정을 모두 입력하세요.";
+    return;
+  }
+  if (knowledgePayload.neo4jEnabled && !knowledgePayload.uri) {
+    setupStatus.textContent = "Neo4j를 사용할 경우 URI를 입력하세요.";
+    return;
+  }
+
+  setupStart.disabled = true;
+  setupStatus.textContent = "설정을 저장하는 중입니다.";
+  try {
+    const data = await apiJson("/api/model-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(modelPayload),
+    });
+    const knowledgeData = await apiJson("/api/knowledge-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(knowledgePayload),
+    });
+    renderModelConfig(data.modelConfig);
+    renderKnowledgeConfig(knowledgeData.knowledgeConfig);
+    renderSetupKnowledgeConfig(knowledgeData.knowledgeConfig);
+    persistSetup({ caseName, investigatorName });
+    applySetupVisibility();
+    activeSessionTitle.textContent = caseName;
+    setStatus(`${caseName} 케이스를 시작했습니다.`);
+  } catch (error) {
+    setupStatus.textContent = `설정 저장 실패: ${error.message}`;
+  } finally {
+    setupStart.disabled = false;
+  }
 }
 
 function escapeHtml(text) {
@@ -266,7 +577,7 @@ function setConnection(online) {
 }
 
 function updateComposerActions() {
-  sendButton.disabled = !state.sessionId || state.isStopping;
+  sendButton.disabled = !state.caseProfile || !state.sessionId || state.isStopping;
   sendButton.textContent = state.isStopping ? "Stopping..." : state.isGenerating ? "Stop" : "Send";
   sendButton.classList.toggle("is-stop", state.isGenerating || state.isStopping);
   sendButton.setAttribute(
@@ -834,6 +1145,116 @@ async function apiJsonOptional(url) {
   }
 }
 
+async function loadModelConfig() {
+  try {
+    const data = await apiJson("/api/model-config");
+    renderModelConfig(data.modelConfig);
+  } catch (error) {
+    setModelStatus("offline", "warn");
+    if (modelSummary) {
+      modelSummary.textContent = error.message || "Model settings are unavailable.";
+    }
+  }
+}
+
+async function testModelConfig() {
+  const payload = currentModelForm();
+  setModelStatus("testing");
+  try {
+    const data = await apiJson("/api/model-config/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = data.result || {};
+    const models = result.models || [];
+    setModelStatus(result.ok ? "ok" : "failed", result.ok ? "success" : "warn");
+    modelSummary.textContent = result.ok
+      ? `Connected. ${models.length ? `Models: ${models.slice(0, 3).join(", ")}` : "Endpoint responded."}`
+      : `Connection failed. ${result.error || "No response."}`;
+  } catch (error) {
+    setModelStatus("failed", "warn");
+    modelSummary.textContent = error.message || "Connection test failed.";
+  }
+}
+
+async function saveModelConfig() {
+  const payload = currentModelForm();
+  state.isApplyingModel = true;
+  setModelStatus("applying");
+  modelSave.disabled = true;
+  try {
+    const data = await apiJson("/api/model-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderModelConfig(data.modelConfig);
+  } catch (error) {
+    setModelStatus("failed", "warn");
+    modelSummary.textContent = error.message || "Could not apply model settings.";
+  } finally {
+    state.isApplyingModel = false;
+    modelSave.disabled = false;
+  }
+}
+
+async function loadKnowledgeConfig() {
+  try {
+    const data = await apiJson("/api/knowledge-config");
+    renderKnowledgeConfig(data.knowledgeConfig);
+    renderSetupKnowledgeConfig(data.knowledgeConfig);
+  } catch (error) {
+    setKnowledgeStatus("offline", "warn");
+    if (knowledgeSummary) {
+      knowledgeSummary.textContent = error.message || "Knowledge settings are unavailable.";
+    }
+  }
+}
+
+async function testKnowledgeConfig() {
+  const payload = currentKnowledgeForm();
+  setKnowledgeStatus("testing");
+  try {
+    const data = await apiJson("/api/knowledge-config/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = data.result || {};
+    const stateText = result.state || "unknown";
+    setKnowledgeStatus(stateText, data.ok ? "success" : "warn");
+    knowledgeSummary.textContent = data.ok
+      ? `Neo4j test succeeded. State: ${stateText}`
+      : `Neo4j test failed. ${result.error || stateText}`;
+  } catch (error) {
+    setKnowledgeStatus("failed", "warn");
+    knowledgeSummary.textContent = error.message || "Neo4j test failed.";
+  }
+}
+
+async function saveKnowledgeConfig() {
+  const payload = currentKnowledgeForm();
+  state.isApplyingKnowledge = true;
+  setKnowledgeStatus("applying");
+  knowledgeSave.disabled = true;
+  try {
+    const data = await apiJson("/api/knowledge-config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderKnowledgeConfig(data.knowledgeConfig);
+    renderSetupKnowledgeConfig(data.knowledgeConfig);
+  } catch (error) {
+    setKnowledgeStatus("failed", "warn");
+    knowledgeSummary.textContent = error.message || "Could not apply knowledge settings.";
+  } finally {
+    state.isApplyingKnowledge = false;
+    knowledgeSave.disabled = false;
+  }
+}
+
 function renderCases() {
   casesList.innerHTML = "";
   if (!state.cases.length) {
@@ -979,45 +1400,10 @@ function renderArtifactDetail(kind, detail) {
   artifactDetail.appendChild(filesCard);
 }
 
-function renderWikiList(notes) {
-  wikiList.innerHTML = "";
-  if (!notes.length) {
-    setEmpty(wikiList, "현재 scope에 저장된 wiki note가 없습니다.");
-    wikiPreview.innerHTML =
-      '<div class="empty-state">저장된 wiki note를 선택하면 여기서 본문을 볼 수 있습니다.</div>';
-    return;
-  }
-
-  for (const note of notes) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "session-item note-item";
-    if (note.id === state.activeWikiNoteId) {
-      button.classList.add("active");
-    }
-    button.innerHTML = `
-      <strong>${escapeHtml(note.title || note.relativePath)}</strong>
-      <small>${escapeHtml(note.summary || "(empty)")}</small>
-      <small>${escapeHtml(note.createdAt || "")}</small>
-    `;
-    button.addEventListener("click", () => loadWikiNote(note.id));
-    wikiList.appendChild(button);
-  }
-}
-
-function renderWikiNote(note) {
-  wikiPreview.innerHTML = `
-    <h3>${escapeHtml(note.title || "Untitled")}</h3>
-    <p class="detail-meta">${escapeHtml(note.metadata?.created_at || "")}</p>
-    <div class="markdown-rendered note-markdown">${renderMarkdown(note.content || "")}</div>
-  `;
-}
-
 function resetUiForFreshBrowserSession() {
   state.activeSessionKey = null;
   state.pendingAssistant = null;
   state.streamNodes.clear();
-  state.activeWikiNoteId = null;
   finishGeneration();
   chatLog.innerHTML = "";
   caseIdInput.value = "";
@@ -1025,10 +1411,6 @@ function resetUiForFreshBrowserSession() {
   activeSessionTitle.textContent = "새 브라우저 세션";
   clearCaseDetail();
   updateScopeSummary();
-  wikiSummary.textContent = "새 WebUI 세션입니다.";
-  wikiList.innerHTML = "";
-  wikiPreview.innerHTML =
-    '<div class="empty-state">저장된 wiki note를 선택하면 여기서 본문을 볼 수 있습니다.</div>';
 }
 
 async function bootstrap({ reset = false } = {}) {
@@ -1037,6 +1419,7 @@ async function bootstrap({ reset = false } = {}) {
   state.commands = data.commands || [];
   state.shellTraces = [];
   state.shellTraceMap = new Map();
+  state.caseProfile = getStoredSetup();
   finishGeneration();
   if (reset) {
     resetUiForFreshBrowserSession();
@@ -1044,13 +1427,20 @@ async function bootstrap({ reset = false } = {}) {
   for (const event of data.shellTraces || []) {
     ingestShellTrace(event);
   }
+  renderModelConfig(data.modelConfig);
+  renderSetupModelConfig(data.modelConfig);
+  renderKnowledgeConfig(data.knowledgeConfig);
+  renderSetupKnowledgeConfig(data.knowledgeConfig);
   renderShellTraces();
   sessionBadge.textContent = data.sessionId;
-  sessionMeta.textContent = `브라우저 세션 ${data.sessionId}`;
+  sessionMeta.textContent = state.caseProfile
+    ? `${state.caseProfile.caseName} - ${state.caseProfile.investigatorName}`
+    : `브라우저 세션 ${data.sessionId}`;
   updateScopeSummary();
   updateComposerActions();
+  applySetupVisibility();
   await connectSocket();
-  await Promise.all([refreshSessions(), refreshCases(), refreshWikiNotes()]);
+  await refreshSessions();
   setStatus(reset ? "새 WebUI 세션을 시작했습니다." : "준비되었습니다.");
 }
 
@@ -1199,7 +1589,6 @@ function handleSocketEvent(event) {
     }
     setStatus("답변을 마무리하는 중입니다.");
     refreshSessions();
-    refreshWikiNotes();
     return;
   }
 
@@ -1234,7 +1623,6 @@ function handleSocketEvent(event) {
     }
     setStatus(wasStopRequested ? "응답 생성이 중지되었습니다." : "응답이 완료되었습니다.");
     refreshSessions();
-    refreshWikiNotes();
   }
 }
 
@@ -1347,57 +1735,6 @@ async function loadArtifact(caseId, artifactId, caseData = state.activeCase) {
   }
 }
 
-async function refreshWikiNotes() {
-  if (!state.sessionId) return;
-
-  const scope = currentScope();
-  const params = new URLSearchParams({ sessionId: state.sessionId });
-  if (scope.caseId) params.set("caseId", scope.caseId);
-  if (scope.artifactId) params.set("artifactId", scope.artifactId);
-
-  try {
-    const data = await apiJson(`/api/wiki?${params.toString()}`);
-    const notes = data.notes || [];
-    wikiSummary.textContent =
-      notes.length > 0
-        ? `${scopeLabel(scope)} scope에 ${notes.length}개의 note가 있습니다.`
-        : `${scopeLabel(scope)} scope에는 아직 note가 없습니다.`;
-    renderWikiList(notes);
-    if (notes.length && !notes.some((note) => note.id === state.activeWikiNoteId)) {
-      await loadWikiNote(notes[0].id);
-    }
-    if (!notes.length) {
-      state.activeWikiNoteId = null;
-    }
-  } catch (error) {
-    wikiSummary.textContent = "wiki note를 읽지 못했습니다.";
-    setEmpty(wikiList, "wiki note를 읽지 못했습니다.");
-    wikiPreview.innerHTML = '<div class="empty-state">wiki preview를 불러오지 못했습니다.</div>';
-    setStatus(`wiki 로드 실패: ${error.message}`);
-  }
-}
-
-async function loadWikiNote(noteId) {
-  try {
-    const data = await apiJson(`/api/wiki/${encodeURIComponent(noteId)}`);
-    state.activeWikiNoteId = noteId;
-    renderWikiList(await currentWikiNotes());
-    renderWikiNote(data.note);
-  } catch (error) {
-    setStatus(`wiki note 로드 실패: ${error.message}`);
-  }
-}
-
-async function currentWikiNotes() {
-  if (!state.sessionId) return [];
-  const scope = currentScope();
-  const params = new URLSearchParams({ sessionId: state.sessionId });
-  if (scope.caseId) params.set("caseId", scope.caseId);
-  if (scope.artifactId) params.set("artifactId", scope.artifactId);
-  const data = await apiJson(`/api/wiki?${params.toString()}`);
-  return data.notes || [];
-}
-
 async function loadSession(session) {
   const data = await apiJson(
     `/api/sessions/${encodeURIComponent(session.key)}?sessionId=${encodeURIComponent(state.sessionId)}`
@@ -1427,12 +1764,6 @@ async function loadSession(session) {
     );
   }
 
-  if (data.session.caseId) {
-    await loadCase(data.session.caseId, { quiet: true });
-  } else {
-    clearCaseDetail();
-  }
-  await refreshWikiNotes();
   await refreshSessions();
 }
 
@@ -1448,16 +1779,14 @@ async function requestStop() {
   freezeLiveAssistantNodes();
   setStatus("중지 요청을 보내는 중입니다.");
 
-  const scope = stopScope();
-
   try {
     await apiJson("/api/stop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: state.sessionId,
-        caseId: scope.caseId || null,
-        artifactId: scope.artifactId || null,
+        caseName: state.caseProfile?.caseName || null,
+        investigatorName: state.caseProfile?.investigatorName || null,
       }),
     });
     setStatus("중지 요청을 전송했습니다.");
@@ -1472,13 +1801,17 @@ async function requestStop() {
 
 async function sendMessage(event) {
   event.preventDefault();
+  if (!state.caseProfile) {
+    applySetupVisibility();
+    setupStatus.textContent = "채팅을 시작하려면 먼저 초기 설정을 완료하세요.";
+    return;
+  }
   if (state.isGenerating || state.isStopping) return;
 
   const rawText = messageInput.value;
   const text = rawText.trim();
   if (!text) return;
 
-  const scope = currentScope();
   makeMessage("user", rawText.trim(), "user");
   if (state.pendingAssistant) {
     finalizeAssistantNode(state.pendingAssistant);
@@ -1494,24 +1827,18 @@ async function sendMessage(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: state.sessionId,
-        caseId: scope.caseId || null,
-        artifactId: scope.artifactId || null,
+        caseName: state.caseProfile.caseName,
+        investigatorName: state.caseProfile.investigatorName,
         text: rawText,
       }),
     });
 
     state.activeSessionKey = data.sessionKey;
-    activeSessionTitle.textContent = data.sessionKey;
+    activeSessionTitle.textContent = state.caseProfile.caseName;
     messageInput.value = "";
     closeSlashMenu();
 
-    if (scope.caseId) {
-      await loadCase(scope.caseId, { quiet: true });
-    } else {
-      clearCaseDetail();
-    }
-
-    await Promise.all([refreshSessions(), refreshWikiNotes()]);
+    await refreshSessions();
   } catch (error) {
     if (state.pendingAssistant) {
       setMessageContent(state.pendingAssistant, `전송 실패: ${error.message}`);
@@ -1528,7 +1855,6 @@ async function selectCase(caseId) {
   artifactIdInput.value = "";
   updateScopeSummary();
   await loadCase(caseId);
-  await refreshWikiNotes();
 }
 
 async function selectArtifact(artifactId) {
@@ -1537,7 +1863,6 @@ async function selectArtifact(artifactId) {
   if (caseIdInput.value.trim()) {
     await loadArtifact(caseIdInput.value.trim(), artifactId);
   }
-  await refreshWikiNotes();
 }
 
 document.querySelector("#refresh-sessions").addEventListener("click", () => {
@@ -1546,15 +1871,55 @@ document.querySelector("#refresh-sessions").addEventListener("click", () => {
 document.querySelector("#refresh-cases").addEventListener("click", () => {
   refreshCases().catch((error) => setStatus(`case 새로고침 실패: ${error.message}`));
 });
-document.querySelector("#refresh-wiki").addEventListener("click", () => {
-  refreshWikiNotes().catch((error) => setStatus(`wiki 새로고침 실패: ${error.message}`));
-});
 document.querySelector("#clear-scope").addEventListener("click", () => {
   caseIdInput.value = "";
   artifactIdInput.value = "";
   updateScopeSummary();
   clearCaseDetail();
-  refreshWikiNotes().catch((error) => setStatus(`wiki 새로고침 실패: ${error.message}`));
+});
+
+modelProvider?.addEventListener("change", syncDefaultApiBaseFromProvider);
+modelTest?.addEventListener("click", () => {
+  testModelConfig().catch((error) => {
+    setModelStatus("failed", "warn");
+    modelSummary.textContent = error.message || "Connection test failed.";
+  });
+});
+modelSave?.addEventListener("click", () => {
+  saveModelConfig().catch((error) => {
+    setModelStatus("failed", "warn");
+    modelSummary.textContent = error.message || "Could not apply model settings.";
+  });
+});
+
+knowledgeTest?.addEventListener("click", () => {
+  testKnowledgeConfig().catch((error) => {
+    setKnowledgeStatus("failed", "warn");
+    knowledgeSummary.textContent = error.message || "Neo4j test failed.";
+  });
+});
+knowledgeSave?.addEventListener("click", () => {
+  saveKnowledgeConfig().catch((error) => {
+    setKnowledgeStatus("failed", "warn");
+    knowledgeSummary.textContent = error.message || "Could not apply knowledge settings.";
+  });
+});
+
+setupProvider?.addEventListener("change", syncSetupDefaultApiBaseFromProvider);
+setupTestModel?.addEventListener("click", () => {
+  testSetupModelConfig().catch((error) => {
+    setupStatus.textContent = `LLM 테스트 실패: ${error.message}`;
+  });
+});
+setupTestNeo4j?.addEventListener("click", () => {
+  testSetupKnowledgeConfig().catch((error) => {
+    setupStatus.textContent = `Neo4j 테스트 실패: ${error.message}`;
+  });
+});
+setupForm?.addEventListener("submit", (event) => {
+  completeInitialSetup(event).catch((error) => {
+    setupStatus.textContent = `설정 저장 실패: ${error.message}`;
+  });
 });
 
 caseIdInput.addEventListener("input", updateScopeSummary);
@@ -1563,24 +1928,18 @@ caseIdInput.addEventListener("change", () => {
   const caseId = caseIdInput.value.trim();
   if (!caseId) {
     clearCaseDetail();
-    refreshWikiNotes().catch((error) => setStatus(`wiki 새로고침 실패: ${error.message}`));
     return;
   }
-  loadCase(caseId)
-    .then(() => refreshWikiNotes())
-    .catch((error) => setStatus(`scope 반영 실패: ${error.message}`));
+  loadCase(caseId).catch((error) => setStatus(`scope 반영 실패: ${error.message}`));
 });
 artifactIdInput.addEventListener("change", () => {
   const caseId = caseIdInput.value.trim();
   const artifactId = artifactIdInput.value.trim();
   if (!artifactId) {
     artifactDetail.innerHTML = "";
-    refreshWikiNotes().catch((error) => setStatus(`wiki 새로고침 실패: ${error.message}`));
     return;
   }
-  loadArtifact(caseId, artifactId)
-    .then(() => refreshWikiNotes())
-    .catch((error) => setStatus(`artifact 반영 실패: ${error.message}`));
+  loadArtifact(caseId, artifactId).catch((error) => setStatus(`artifact 반영 실패: ${error.message}`));
 });
 
 messageInput.addEventListener("compositionstart", () => {
