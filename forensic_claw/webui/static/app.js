@@ -9,8 +9,6 @@ const state = {
   cases: [],
   commands: [],
   activeCase: null,
-  shellTraces: [],
-  shellTraceMap: new Map(),
   slashSelection: 0,
   isResettingSession: false,
   isGenerating: false,
@@ -65,9 +63,6 @@ const caseDetail = document.querySelector("#case-detail");
 const artifactDetail = document.querySelector("#artifact-detail");
 const caseSummary = document.querySelector("#case-summary");
 const caseDetailStatus = document.querySelector("#case-detail-status");
-const shellTraceCount = document.querySelector("#shell-trace-count");
-const shellTraceSummary = document.querySelector("#shell-trace-summary");
-const shellTraceList = document.querySelector("#shell-trace-list");
 const modelStatus = document.querySelector("#model-status");
 const modelProvider = document.querySelector("#model-provider");
 const modelId = document.querySelector("#model-id");
@@ -920,171 +915,6 @@ function parseSessionScope(sessionKey) {
   };
 }
 
-function formatTraceTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleTimeString("ko-KR", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function summarizeCommand(command) {
-  const text = String(command || "").trim().replace(/\s+/g, " ");
-  if (!text) return "(empty command)";
-  return text.length > 88 ? `${text.slice(0, 85)}...` : text;
-}
-
-function shellTraceStatusLabel(status) {
-  switch (status) {
-    case "running":
-      return "running";
-    case "completed":
-      return "completed";
-    case "timed_out":
-      return "timed out";
-    case "blocked":
-      return "blocked";
-    case "error":
-      return "error";
-    default:
-      return status || "pending";
-  }
-}
-
-function renderShellTraces() {
-  shellTraceCount.textContent = String(state.shellTraces.length);
-  shellTraceSummary.textContent =
-    state.shellTraces.length > 0
-      ? `현재 브라우저 세션에서 ${state.shellTraces.length}개의 shell 실행 로그를 추적 중입니다.`
-      : "LLM이 실행한 shell command를 실시간으로 보여줍니다.";
-
-  shellTraceList.innerHTML = "";
-  if (!state.shellTraces.length) {
-    setEmpty(shellTraceList, "아직 shell 실행 로그가 없습니다.");
-    return;
-  }
-
-  for (const trace of state.shellTraces) {
-    const scope = scopeLabel(parseSessionScope(trace.sessionKey || ""));
-    const traceStatus = trace.status || "pending";
-    const item = document.createElement("details");
-    item.className = "trace-entry";
-    if (trace.status === "running") {
-      item.open = true;
-    }
-
-    const summary = document.createElement("summary");
-    summary.innerHTML = `
-      <span class="trace-summary-row">
-        <strong class="trace-command">${escapeHtml(summarizeCommand(trace.command))}</strong>
-        <span class="trace-pill ${traceStatus}">${escapeHtml(shellTraceStatusLabel(trace.status))}</span>
-      </span>
-      <small class="trace-summary-meta">${escapeHtml([scope, trace.shell, formatTraceTime(trace.lastUpdatedAt || trace.startedAt)].filter(Boolean).join(" · "))}</small>
-    `;
-    item.appendChild(summary);
-
-    const body = document.createElement("div");
-    body.className = "trace-body";
-
-    const meta = document.createElement("div");
-    meta.className = "trace-meta-grid";
-    const rows = [
-      ["Scope", scope],
-      ["Shell", trace.shellPath || trace.shell || ""],
-      ["Working Dir", trace.workingDir || ""],
-      ["Timeout", trace.timeout != null ? `${trace.timeout}s` : ""],
-      ["Exit Code", trace.exitCode != null ? String(trace.exitCode) : ""],
-      ["Duration", trace.durationMs != null ? `${trace.durationMs} ms` : ""],
-      ["Updated", trace.lastUpdatedAt || trace.endedAt || trace.startedAt || ""],
-    ].filter(([, value]) => value);
-    for (const [label, value] of rows) {
-      const row = document.createElement("div");
-      row.className = "trace-meta-row";
-      row.innerHTML = `
-        <span>${escapeHtml(label)}</span>
-        <code>${escapeHtml(String(value))}</code>
-      `;
-      meta.appendChild(row);
-    }
-    body.appendChild(meta);
-
-    if (trace.summary) {
-      const summaryBlock = document.createElement("p");
-      summaryBlock.className = "trace-note";
-      summaryBlock.textContent = trace.summary;
-      body.appendChild(summaryBlock);
-    }
-
-    const commandBlock = document.createElement("pre");
-    commandBlock.className = "detail-block trace-block";
-    commandBlock.textContent = trace.command || "";
-    body.appendChild(commandBlock);
-
-    if (trace.launcher) {
-      const launcherLabel = document.createElement("p");
-      launcherLabel.className = "trace-label";
-      launcherLabel.textContent = "Launcher";
-      body.appendChild(launcherLabel);
-
-      const launcherBlock = document.createElement("pre");
-      launcherBlock.className = "detail-block trace-block";
-      launcherBlock.textContent = trace.launcher;
-      body.appendChild(launcherBlock);
-    }
-
-    if (trace.wrapper) {
-      const wrapper = document.createElement("p");
-      wrapper.className = "trace-note subtle";
-      wrapper.textContent = trace.wrapper;
-      body.appendChild(wrapper);
-    }
-
-    item.appendChild(body);
-    shellTraceList.appendChild(item);
-  }
-}
-
-function ingestShellTrace(event) {
-  const incoming = event.trace || {};
-  const storageKey = `${event.sessionKey || "base"}::${incoming.traceId || event.timestamp || Math.random()}`;
-  let trace = state.shellTraceMap.get(storageKey);
-  if (!trace) {
-    trace = {
-      key: storageKey,
-      sessionKey: event.sessionKey || "",
-      startedAt: incoming.phase === "start" ? event.timestamp : "",
-      endedAt: "",
-      lastUpdatedAt: event.timestamp || "",
-    };
-    state.shellTraceMap.set(storageKey, trace);
-    state.shellTraces.unshift(trace);
-  }
-
-  Object.assign(trace, incoming);
-  trace.sessionKey = event.sessionKey || trace.sessionKey || "";
-  trace.lastUpdatedAt = event.timestamp || trace.lastUpdatedAt || "";
-  if (incoming.phase === "start" && !trace.startedAt) {
-    trace.startedAt = event.timestamp || trace.startedAt;
-  }
-  if (incoming.phase === "end") {
-    trace.endedAt = event.timestamp || trace.endedAt;
-  }
-
-  state.shellTraces.sort((a, b) => String(b.lastUpdatedAt || "").localeCompare(String(a.lastUpdatedAt || "")));
-  if (state.shellTraces.length > 120) {
-    for (const stale of state.shellTraces.splice(120)) {
-      state.shellTraceMap.delete(stale.key);
-    }
-  }
-  renderShellTraces();
-}
-
 function refreshSuggestionLists() {
   const caseIds = new Set();
   for (const item of state.cases) {
@@ -1417,21 +1247,15 @@ async function bootstrap({ reset = false } = {}) {
   const data = await apiJson(reset ? "/api/bootstrap?reset=1" : "/api/bootstrap");
   state.sessionId = data.sessionId;
   state.commands = data.commands || [];
-  state.shellTraces = [];
-  state.shellTraceMap = new Map();
   state.caseProfile = getStoredSetup();
   finishGeneration();
   if (reset) {
     resetUiForFreshBrowserSession();
   }
-  for (const event of data.shellTraces || []) {
-    ingestShellTrace(event);
-  }
   renderModelConfig(data.modelConfig);
   renderSetupModelConfig(data.modelConfig);
   renderKnowledgeConfig(data.knowledgeConfig);
   renderSetupKnowledgeConfig(data.knowledgeConfig);
-  renderShellTraces();
   sessionBadge.textContent = data.sessionId;
   sessionMeta.textContent = state.caseProfile
     ? `${state.caseProfile.caseName} - ${state.caseProfile.investigatorName}`
@@ -1515,12 +1339,6 @@ function handleSocketEvent(event) {
   }
 
   if (event.type === "shell_trace") {
-    ingestShellTrace(event);
-    setStatus(
-      event.trace?.phase === "start"
-        ? "쉘 명령 실행 로그를 기록했습니다."
-        : "쉘 명령 실행 결과가 업데이트되었습니다."
-    );
     return;
   }
 

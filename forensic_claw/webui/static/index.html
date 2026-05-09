@@ -4,15 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forensic-Claw Local Workbench</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css">
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=layout-20260509">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
       <form id="setup-form" class="setup-card">
         <div>
-          <p class="eyebrow">Local WebUI Setup</p>
+          <p class="eyebrow">Local Workbench Setup</p>
           <h1>Forensic-Claw</h1>
-          <p class="subtle">케이스 정보와 Local LLM 연결을 먼저 설정하세요.</p>
+          <p class="subtle">케이스, 모델, 지식 저장소를 한 번에 준비합니다.</p>
         </div>
 
         <div class="setup-grid">
@@ -38,7 +38,7 @@
           </label>
           <label class="field check-field setup-wide">
             <input id="setup-neo4j-enabled" type="checkbox" checked>
-            <span>Enable RAG + Neo4j Graph</span>
+            <span>Enable RAG and Neo4j Graph</span>
           </label>
           <label class="field setup-wide">
             <span>Neo4j URI</span>
@@ -61,7 +61,7 @@
         <div class="setup-actions">
           <button id="setup-test-model" class="ghost-button" type="button">Test LLM</button>
           <button id="setup-test-neo4j" class="ghost-button" type="button">Test Neo4j</button>
-          <button id="setup-start" class="send-button" type="submit">Start Chat</button>
+          <button id="setup-start" class="send-button" type="submit">Start Workspace</button>
         </div>
         <p id="setup-status" class="subtle">Ollama, LM Studio, llama.cpp 등 OpenAI-compatible endpoint를 사용할 수 있습니다.</p>
       </form>
@@ -70,22 +70,30 @@
     <div id="app-shell" class="shell is-hidden">
       <aside class="sidebar">
         <div class="brand">
-          <p class="eyebrow">Local WebUI</p>
+          <p class="eyebrow">Evidence Workbench</p>
           <h1>Forensic-Claw</h1>
-          <p class="subtle">케이스 시작 정보를 바탕으로 로컬 분석 채팅을 진행합니다.</p>
+          <p class="subtle">로컬 모델과 지식 저장소로 케이스 분석을 진행합니다.</p>
         </div>
 
         <section class="panel">
           <div class="panel-title-row">
-            <h2>Session</h2>
+            <h2>Case</h2>
             <span id="session-badge" class="badge">loading</span>
           </div>
-          <p id="session-meta" class="subtle">브라우저 세션을 준비하는 중입니다.</p>
+          <p id="session-meta" class="subtle">세션을 준비하는 중입니다.</p>
+        </section>
+
+        <section class="panel sessions-panel">
+          <div class="panel-title-row">
+            <h2>Threads</h2>
+            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div id="sessions-list" class="session-list"></div>
         </section>
 
         <section class="panel model-panel">
           <div class="panel-title-row">
-            <h2>Model</h2>
+            <h2>Runtime</h2>
             <span id="model-status" class="badge">idle</span>
           </div>
           <label class="field">
@@ -109,7 +117,7 @@
 
         <section class="panel knowledge-panel">
           <div class="panel-title-row">
-            <h2>Knowledge</h2>
+            <h2>Knowledge Store</h2>
             <span id="knowledge-status" class="badge">idle</span>
           </div>
           <label class="field check-field">
@@ -147,14 +155,6 @@
           <p id="knowledge-summary" class="subtle">Knowledge and Neo4j settings are loading.</p>
         </section>
 
-        <section class="panel sessions-panel">
-          <div class="panel-title-row">
-            <h2>Recent Sessions</h2>
-            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
-          </div>
-          <div id="sessions-list" class="session-list"></div>
-        </section>
-
         <section class="panel case-scope-panel" hidden>
           <div class="panel-title-row">
             <h2>Scope</h2>
@@ -183,7 +183,7 @@
       <main class="workspace">
         <header class="workspace-header">
           <div>
-            <p class="eyebrow">Local Chat</p>
+            <p class="eyebrow">Investigation Thread</p>
             <h2 id="active-session-title">새 브라우저 세션</h2>
           </div>
           <div class="header-status">
@@ -196,19 +196,6 @@
           <section id="chat-log" class="chat-log"></section>
 
           <aside class="inspector">
-            <section class="panel inspector-panel">
-              <details id="shell-trace-panel" class="trace-panel" open>
-                <summary class="trace-panel-summary">
-                  <span class="trace-panel-title">Shell Trace</span>
-                  <span id="shell-trace-count" class="badge">0</span>
-                </summary>
-                <p id="shell-trace-summary" class="subtle">LLM이 실행한 shell command를 실시간으로 보여줍니다.</p>
-                <div id="shell-trace-list" class="trace-list">
-                  <div class="empty-state">아직 shell 실행 로그가 없습니다.</div>
-                </div>
-              </details>
-            </section>
-
             <section class="panel inspector-panel case-inspector-panel" hidden>
               <div class="panel-title-row">
                 <h2>Case Explorer</h2>
@@ -226,7 +213,7 @@
           <div id="status-line" class="status-line">연결을 준비하는 중입니다.</div>
           <div id="slash-menu" class="slash-menu" hidden></div>
           <form id="composer" class="composer">
-            <textarea id="message-input" rows="4" placeholder="분석할 내용을 입력하세요"></textarea>
+            <textarea id="message-input" rows="4" placeholder="증거, 로그, 브라우저 기록에 대해 질문하세요"></textarea>
             <button id="send-button" class="send-button" type="button">Send</button>
           </form>
         </section>
@@ -243,6 +230,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js" defer></script>
+    <script src="/ui/assets/app.js?v=layout-20260509" defer></script>
   </body>
 </html>
