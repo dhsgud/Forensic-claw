@@ -34,13 +34,20 @@ const setupInvestigatorName = document.querySelector("#setup-investigator-name")
 const setupProvider = document.querySelector("#setup-model-provider");
 const setupModelId = document.querySelector("#setup-model-id");
 const setupApiBase = document.querySelector("#setup-model-api-base");
+const setupKnowledgeBackend = document.querySelector("#setup-knowledge-backend");
 const setupNeo4jEnabled = document.querySelector("#setup-neo4j-enabled");
 const setupNeo4jUri = document.querySelector("#setup-neo4j-uri");
 const setupNeo4jUsername = document.querySelector("#setup-neo4j-username");
 const setupNeo4jPassword = document.querySelector("#setup-neo4j-password");
 const setupNeo4jDatabase = document.querySelector("#setup-neo4j-database");
+const setupHelixEnabled = document.querySelector("#setup-helix-enabled");
+const setupHelixPort = document.querySelector("#setup-helix-port");
+const setupHelixApiEndpoint = document.querySelector("#setup-helix-api-endpoint");
+const setupHelixFallback = document.querySelector("#setup-helix-fallback");
+const setupNeo4jFields = document.querySelectorAll(".setup-neo4j-field");
+const setupHelixFields = document.querySelectorAll(".setup-helix-field");
 const setupTestModel = document.querySelector("#setup-test-model");
-const setupTestNeo4j = document.querySelector("#setup-test-neo4j");
+const setupTestDb = document.querySelector("#setup-test-db");
 const setupStart = document.querySelector("#setup-start");
 const setupStatus = document.querySelector("#setup-status");
 const sessionBadge = document.querySelector("#session-badge");
@@ -160,6 +167,45 @@ function setKnowledgeStatus(text, kind = "") {
   knowledgeStatus.classList.toggle("warn", kind === "warn");
 }
 
+function knowledgeBackendLabel(backend) {
+  return backend === "helix" ? "HelixDB" : "Neo4j";
+}
+
+function syncKnowledgeBackendUi() {
+  const backend = knowledgeBackend?.value || state.knowledgeConfig?.backend || "sqlite";
+  const usingHelix = backend === "helix";
+  if (usingHelix && helixEnabled && !helixEnabled.checked) {
+    helixEnabled.checked = true;
+  }
+  if (knowledgeTest) {
+    knowledgeTest.textContent = `Test ${knowledgeBackendLabel(backend)}`;
+    knowledgeTest.setAttribute("aria-label", `Test ${knowledgeBackendLabel(backend)} connection`);
+  }
+  if (helixEnabled) helixEnabled.closest(".field")?.toggleAttribute("hidden", !usingHelix);
+  if (helixPort) helixPort.closest(".field")?.toggleAttribute("hidden", !usingHelix);
+  if (helixApiEndpoint) helixApiEndpoint.closest(".field")?.toggleAttribute("hidden", !usingHelix);
+  if (helixFallback) helixFallback.closest(".field")?.toggleAttribute("hidden", !usingHelix);
+  if (neo4jEnabled) neo4jEnabled.closest(".field")?.toggleAttribute("hidden", usingHelix);
+  if (neo4jUri) neo4jUri.closest(".field")?.toggleAttribute("hidden", usingHelix);
+  if (neo4jUsername) neo4jUsername.closest(".field")?.toggleAttribute("hidden", usingHelix);
+  if (neo4jPassword) neo4jPassword.closest(".field")?.toggleAttribute("hidden", usingHelix);
+  if (neo4jDatabase) neo4jDatabase.closest(".field")?.toggleAttribute("hidden", usingHelix);
+}
+
+function syncSetupKnowledgeBackendUi() {
+  const backend = setupKnowledgeBackend?.value || state.knowledgeConfig?.backend || "sqlite";
+  const usingHelix = backend === "helix";
+  if (usingHelix && setupHelixEnabled && !setupHelixEnabled.checked) {
+    setupHelixEnabled.checked = true;
+  }
+  if (setupTestDb) {
+    setupTestDb.textContent = `Test ${knowledgeBackendLabel(backend)}`;
+    setupTestDb.setAttribute("aria-label", `Test ${knowledgeBackendLabel(backend)} connection`);
+  }
+  setupNeo4jFields.forEach((field) => field.toggleAttribute("hidden", usingHelix));
+  setupHelixFields.forEach((field) => field.toggleAttribute("hidden", !usingHelix));
+}
+
 function knowledgePayloadFromFields(fields) {
   const payload = {
     enabled: Boolean(fields.knowledgeEnabled?.checked),
@@ -202,12 +248,12 @@ function currentKnowledgeForm() {
 function setupKnowledgeFormPayload() {
   return knowledgePayloadFromFields({
     knowledgeEnabled: { checked: true },
-    backend: { value: state.knowledgeConfig?.backend || "sqlite" },
+    backend: { value: setupKnowledgeBackend?.value || state.knowledgeConfig?.backend || "sqlite" },
     storeDir: { value: state.knowledgeConfig?.storeDir || "knowledge" },
-    helixEnabled: { checked: Boolean(state.knowledgeConfig?.helix?.enabled) },
-    helixPort: { value: state.knowledgeConfig?.helix?.port || 6969 },
-    helixApiEndpoint: { value: state.knowledgeConfig?.helix?.apiEndpoint || "" },
-    helixFallback: { checked: state.knowledgeConfig?.helix?.fallbackToSqlite ?? true },
+    helixEnabled: setupHelixEnabled,
+    helixPort: setupHelixPort,
+    helixApiEndpoint: setupHelixApiEndpoint,
+    helixFallback: setupHelixFallback,
     neo4jEnabled: setupNeo4jEnabled,
     uri: setupNeo4jUri,
     username: setupNeo4jUsername,
@@ -254,11 +300,14 @@ function renderKnowledgeConfig(config) {
   knowledgeSummary.textContent = usingHelix
     ? `RAG ${config.enabled ? "enabled" : "disabled"} - HelixDB ${stateText} - port ${helix.port || 6969}`
     : `RAG ${config.enabled ? "enabled" : "disabled"} - ${config.storeDir || "knowledge"} - Neo4j ${stateText}`;
+  syncKnowledgeBackendUi();
 }
 
 function renderSetupKnowledgeConfig(config) {
-  if (!setupNeo4jEnabled || !setupNeo4jUri || !setupNeo4jUsername || !setupNeo4jDatabase) return;
+  if (!setupKnowledgeBackend || !setupNeo4jEnabled || !setupNeo4jUri || !setupNeo4jUsername || !setupNeo4jDatabase) return;
   const neo4j = config?.neo4j || {};
+  const helix = config?.helix || {};
+  setupKnowledgeBackend.value = config?.backend || "sqlite";
   setupNeo4jEnabled.checked = Boolean(neo4j.enabled ?? true);
   setupNeo4jUri.value = neo4j.uri || "bolt://127.0.0.1:7687";
   setupNeo4jUsername.value = neo4j.username || "neo4j";
@@ -267,6 +316,11 @@ function renderSetupKnowledgeConfig(config) {
     setupNeo4jPassword.value = "";
     setupNeo4jPassword.placeholder = neo4j.passwordConfigured ? "Saved password configured" : "";
   }
+  if (setupHelixEnabled) setupHelixEnabled.checked = Boolean(helix.enabled);
+  if (setupHelixPort) setupHelixPort.value = helix.port || 6969;
+  if (setupHelixApiEndpoint) setupHelixApiEndpoint.value = helix.apiEndpoint || "";
+  if (setupHelixFallback) setupHelixFallback.checked = helix.fallbackToSqlite ?? true;
+  syncSetupKnowledgeBackendUi();
 }
 
 function getStoredSetup() {
@@ -351,17 +405,19 @@ async function testSetupModelConfig() {
 }
 
 async function testSetupKnowledgeConfig() {
-  setupStatus.textContent = "Neo4j 연결을 확인하는 중입니다.";
+  const payload = setupKnowledgeFormPayload();
+  const label = knowledgeBackendLabel(payload.backend);
+  setupStatus.textContent = `${label} 연결을 확인하는 중입니다.`;
   const data = await apiJson("/api/knowledge-config/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(setupKnowledgeFormPayload()),
+    body: JSON.stringify(payload),
   });
   const result = data.result || {};
   const stateText = result.state || "unknown";
   setupStatus.textContent = data.ok
-    ? `Neo4j 상태: ${stateText}`
-    : `Neo4j 연결 실패: ${result.error || stateText}`;
+    ? `${label} 상태: ${stateText}`
+    : `${label} 연결 실패: ${result.error || stateText}`;
 }
 
 async function completeInitialSetup(event) {
@@ -374,7 +430,7 @@ async function completeInitialSetup(event) {
     setupStatus.textContent = "케이스 이름, 수사관 이름, Local LLM 설정을 모두 입력하세요.";
     return;
   }
-  if (knowledgePayload.neo4jEnabled && !knowledgePayload.uri) {
+  if (knowledgePayload.backend !== "helix" && knowledgePayload.neo4jEnabled && !knowledgePayload.uri) {
     setupStatus.textContent = "Neo4j를 사용할 경우 URI를 입력하세요.";
     return;
   }
@@ -1206,6 +1262,7 @@ async function loadKnowledgeConfig() {
 
 async function testKnowledgeConfig() {
   const payload = currentKnowledgeForm();
+  const label = knowledgeBackendLabel(payload.backend);
   setKnowledgeStatus("testing");
   try {
     const data = await apiJson("/api/knowledge-config/test", {
@@ -1217,11 +1274,11 @@ async function testKnowledgeConfig() {
     const stateText = result.state || "unknown";
     setKnowledgeStatus(stateText, data.ok ? "success" : "warn");
     knowledgeSummary.textContent = data.ok
-      ? `Neo4j test succeeded. State: ${stateText}`
-      : `Neo4j test failed. ${result.error || stateText}`;
+      ? `${label} test succeeded. State: ${stateText}`
+      : `${label} test failed. ${result.error || stateText}`;
   } catch (error) {
     setKnowledgeStatus("failed", "warn");
-    knowledgeSummary.textContent = error.message || "Neo4j test failed.";
+    knowledgeSummary.textContent = error.message || `${label} test failed.`;
   }
 }
 
@@ -1879,10 +1936,12 @@ modelSave?.addEventListener("click", () => {
   });
 });
 
+knowledgeBackend?.addEventListener("change", syncKnowledgeBackendUi);
 knowledgeTest?.addEventListener("click", () => {
   testKnowledgeConfig().catch((error) => {
     setKnowledgeStatus("failed", "warn");
-    knowledgeSummary.textContent = error.message || "Neo4j test failed.";
+    const label = knowledgeBackendLabel(currentKnowledgeForm().backend);
+    knowledgeSummary.textContent = error.message || `${label} test failed.`;
   });
 });
 knowledgeSave?.addEventListener("click", () => {
@@ -1893,14 +1952,16 @@ knowledgeSave?.addEventListener("click", () => {
 });
 
 setupProvider?.addEventListener("change", syncSetupDefaultApiBaseFromProvider);
+setupKnowledgeBackend?.addEventListener("change", syncSetupKnowledgeBackendUi);
 setupTestModel?.addEventListener("click", () => {
   testSetupModelConfig().catch((error) => {
     setupStatus.textContent = `LLM 테스트 실패: ${error.message}`;
   });
 });
-setupTestNeo4j?.addEventListener("click", () => {
+setupTestDb?.addEventListener("click", () => {
   testSetupKnowledgeConfig().catch((error) => {
-    setupStatus.textContent = `Neo4j 테스트 실패: ${error.message}`;
+    const label = knowledgeBackendLabel(setupKnowledgeFormPayload().backend);
+    setupStatus.textContent = `${label} 테스트 실패: ${error.message}`;
   });
 });
 setupForm?.addEventListener("submit", (event) => {

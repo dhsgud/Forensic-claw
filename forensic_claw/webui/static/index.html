@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forensic-Claw Local Workbench</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css?v=attachments-20260509">
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=dbtest-20260510">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
@@ -36,31 +36,54 @@
             <span>API Base</span>
             <input id="setup-model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1" required>
           </label>
-          <label class="field check-field setup-wide">
+          <label class="field setup-wide">
+            <span>Knowledge Backend</span>
+            <select id="setup-knowledge-backend">
+              <option value="sqlite">SQLite RAG + Neo4j</option>
+              <option value="helix">HelixDB</option>
+            </select>
+          </label>
+          <label class="field check-field setup-wide setup-neo4j-field">
             <input id="setup-neo4j-enabled" type="checkbox" checked>
             <span>Enable RAG and Neo4j Graph</span>
           </label>
-          <label class="field setup-wide">
+          <label class="field setup-wide setup-neo4j-field">
             <span>Neo4j URI</span>
             <input id="setup-neo4j-uri" type="text" placeholder="bolt://127.0.0.1:7687">
           </label>
-          <label class="field">
+          <label class="field setup-neo4j-field">
             <span>Neo4j Username</span>
             <input id="setup-neo4j-username" type="text" placeholder="neo4j">
           </label>
-          <label class="field">
+          <label class="field setup-neo4j-field">
             <span>Neo4j Password</span>
             <input id="setup-neo4j-password" type="password" autocomplete="new-password">
           </label>
-          <label class="field setup-wide">
+          <label class="field setup-wide setup-neo4j-field">
             <span>Neo4j Database</span>
             <input id="setup-neo4j-database" type="text" placeholder="neo4j">
+          </label>
+          <label class="field check-field setup-wide setup-helix-field" hidden>
+            <input id="setup-helix-enabled" type="checkbox">
+            <span>Enable HelixDB</span>
+          </label>
+          <label class="field setup-helix-field" hidden>
+            <span>Helix Port</span>
+            <input id="setup-helix-port" type="number" min="1" max="65535" placeholder="6969">
+          </label>
+          <label class="field setup-wide setup-helix-field" hidden>
+            <span>Helix API Endpoint</span>
+            <input id="setup-helix-api-endpoint" type="text" placeholder="http://127.0.0.1:6969">
+          </label>
+          <label class="field check-field setup-wide setup-helix-field" hidden>
+            <input id="setup-helix-fallback" type="checkbox" checked>
+            <span>Fallback to SQLite if Helix query fails</span>
           </label>
         </div>
 
         <div class="setup-actions">
           <button id="setup-test-model" class="ghost-button" type="button">Test LLM</button>
-          <button id="setup-test-neo4j" class="ghost-button" type="button">Test Neo4j</button>
+          <button id="setup-test-db" class="ghost-button" type="button">Test DB</button>
           <button id="setup-start" class="send-button" type="submit">Start Workspace</button>
         </div>
         <p id="setup-status" class="subtle">Ollama, LM Studio, llama.cpp 등 OpenAI-compatible endpoint를 사용할 수 있습니다.</p>
@@ -135,19 +158,19 @@
             <span>Store Directory</span>
             <input id="knowledge-store-dir" type="text" placeholder="knowledge">
           </label>
-          <label class="field check-field">
+          <label class="field check-field" hidden>
             <input id="helix-enabled" type="checkbox">
             <span>Enable HelixDB</span>
           </label>
-          <label class="field">
+          <label class="field" hidden>
             <span>Helix Port</span>
             <input id="helix-port" type="number" min="1" max="65535" placeholder="6969">
           </label>
-          <label class="field">
+          <label class="field" hidden>
             <span>Helix API Endpoint</span>
             <input id="helix-api-endpoint" type="text" placeholder="http://127.0.0.1:6969">
           </label>
-          <label class="field check-field">
+          <label class="field check-field" hidden>
             <input id="helix-fallback" type="checkbox" checked>
             <span>Fallback to SQLite if Helix query fails</span>
           </label>
@@ -172,7 +195,7 @@
             <input id="neo4j-database" type="text" placeholder="neo4j">
           </label>
           <div class="button-row">
-            <button id="knowledge-test" class="ghost-button" type="button">Test</button>
+            <button id="knowledge-test" class="ghost-button" type="button">Test DB</button>
             <button id="knowledge-save" class="ghost-button" type="button">Apply</button>
           </div>
           <p id="knowledge-summary" class="subtle">Knowledge and Neo4j settings are loading.</p>
@@ -255,6 +278,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js?v=attachments-20260509" defer></script>
+    <script src="/ui/assets/app.js?v=dbtest-20260510" defer></script>
   </body>
 </html>
