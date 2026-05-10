@@ -186,6 +186,10 @@ button {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
 }
 
+.workspace-body.graph-wide:not(.no-inspector) {
+  grid-template-columns: minmax(300px, 0.62fr) minmax(560px, 1.38fr);
+}
+
 .panel {
   padding: 14px;
   border: 1px solid var(--line);
@@ -205,6 +209,26 @@ button {
   margin: 0;
   font-size: 0.92rem;
   font-weight: 760;
+}
+
+.graph-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.graph-zoom-level {
+  min-width: 56px;
+  padding-inline: 10px;
+  color: var(--muted-strong);
+  font-variant-numeric: tabular-nums;
 }
 
 .sessions-panel {
@@ -764,19 +788,61 @@ select:focus {
   min-height: 0;
 }
 
+.graph-inspector-panel.expanded {
+  background: #fbfdff;
+}
+
+.graph-inspector-panel.fullscreen {
+  position: fixed;
+  inset: 14px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 28px);
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+.graph-fullscreen-active {
+  overflow: hidden;
+}
+
 .graph-canvas {
-  min-height: 320px;
+  height: clamp(420px, 52vh, 620px);
   margin-bottom: 12px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #ffffff;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.graph-canvas.is-panning {
+  cursor: grabbing;
+}
+
+.graph-inspector-panel.expanded .graph-canvas {
+  height: clamp(560px, 64vh, 760px);
+}
+
+.graph-inspector-panel.fullscreen .graph-canvas {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.graph-inspector-panel.fullscreen .detail-stack {
+  flex: 0 0 auto;
+  max-height: 28vh;
+  overflow: auto;
 }
 
 .graph-svg {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
 }
 
 .graph-svg rect {
@@ -794,6 +860,11 @@ select:focus {
   paint-order: stroke;
   stroke: #ffffff;
   stroke-width: 4px;
+}
+
+.graph-svg-expanded .graph-edge text,
+.graph-svg-fullscreen .graph-edge text {
+  font-size: 13px;
 }
 
 .graph-node {
@@ -818,6 +889,11 @@ select:focus {
   paint-order: stroke;
   stroke: #ffffff;
   stroke-width: 4px;
+}
+
+.graph-svg-expanded .graph-node text,
+.graph-svg-fullscreen .graph-node text {
+  font-size: 14px;
 }
 
 .graph-node:focus {
@@ -998,6 +1074,16 @@ select:focus {
     order: 1;
     height: auto;
     min-height: 72vh;
+  }
+
+  .workspace-body:not(.no-inspector),
+  .workspace-body.graph-wide:not(.no-inspector) {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector {
+    border-left: 0;
+    border-top: 1px solid var(--line);
   }
 }
 

@@ -215,9 +215,18 @@
             <section id="graph-inspector-panel" class="panel inspector-panel graph-inspector-panel" hidden>
               <div class="panel-title-row">
                 <h2>Graph View</h2>
-                <button id="graph-close" class="ghost-button icon-button" type="button" aria-label="Close graph panel">×</button>
+                <div class="graph-panel-actions" aria-label="Graph view controls">
+                  <button id="graph-expand" class="ghost-button icon-button" type="button" aria-label="Expand graph panel" title="넓게 보기">↔</button>
+                  <button id="graph-fullscreen" class="ghost-button icon-button" type="button" aria-label="Open graph fullscreen" title="전체화면">⛶</button>
+                  <button id="graph-close" class="ghost-button icon-button" type="button" aria-label="Close graph panel" title="닫기">×</button>
+                </div>
               </div>
               <p id="graph-summary" class="subtle">관계 그래프를 선택하세요.</p>
+              <div class="graph-zoom-controls" aria-label="Graph zoom controls">
+                <button id="graph-zoom-out" class="ghost-button icon-button" type="button" aria-label="Zoom out" title="축소">−</button>
+                <button id="graph-zoom-reset" class="ghost-button graph-zoom-level" type="button" aria-label="Reset graph zoom" title="100%로 초기화">100%</button>
+                <button id="graph-zoom-in" class="ghost-button icon-button" type="button" aria-label="Zoom in" title="확대">+</button>
+              </div>
               <div id="graph-canvas" class="graph-canvas"></div>
               <div id="graph-detail" class="detail-stack"></div>
             </section>

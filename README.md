@@ -64,6 +64,10 @@ HelixDB를 사용할 경우:
 .\Forensic-Claw.exe infra up --backend helix
 ```
 
+위 명령은 `~\.forensic-claw\infra\helix\docker-compose.yml`을 생성한 뒤
+`helix check dev`, `helix build dev`, `docker compose up -d` 순서로 HelixDB를 띄웁니다.
+소스 트리에서 직접 실행하려면 `infra\helix\start.ps1`을 사용할 수 있습니다.
+
 WebUI HelixDB 설정:
 
 ```text

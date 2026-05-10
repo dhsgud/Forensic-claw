@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from forensic_claw.cli.commands import app
-from forensic_claw.cli.infra import ensure_backend_files, ensure_infra_files, run_helix
+from forensic_claw.cli.infra import ensure_backend_files, ensure_infra_files, run_compose, run_helix
 
 runner = CliRunner()
 
@@ -11,11 +11,16 @@ runner = CliRunner()
 def test_ensure_infra_files_writes_helix_project_when_directory_is_empty(tmp_path) -> None:
     toml_path, readme_path = ensure_infra_files(tmp_path)
     query_path = tmp_path / "helix" / "db" / "forensic_claw.hx"
+    compose_path = tmp_path / "helix" / "docker-compose.yml"
 
     assert toml_path == tmp_path / "helix" / "helix.toml"
     assert readme_path == tmp_path / "helix" / "README.md"
     assert 'name = "forensic-claw-knowledge"' in toml_path.read_text(encoding="utf-8")
     assert "QUERY SearchEvidenceHybrid" in query_path.read_text(encoding="utf-8")
+    compose = compose_path.read_text(encoding="utf-8")
+    assert "helix-forensic-claw-knowledge-dev:dev" in compose
+    assert "0.0.0.0:${HELIX_HOST_PORT:-6969}:${HELIX_CONTAINER_PORT:-6969}" in compose
+    assert "HELIX_DATA_DIR: /data" in compose
 
 
 def test_infra_init_writes_helix_files_to_requested_path(tmp_path) -> None:
@@ -24,6 +29,7 @@ def test_infra_init_writes_helix_files_to_requested_path(tmp_path) -> None:
     assert result.exit_code == 0
     assert (tmp_path / "helix" / "helix.toml").exists()
     assert (tmp_path / "helix" / "README.md").exists()
+    assert (tmp_path / "helix" / "docker-compose.yml").exists()
 
 
 def test_ensure_backend_files_rejects_unknown_backend(tmp_path) -> None:
@@ -65,6 +71,33 @@ def test_run_helix_returns_127_when_cli_is_missing(tmp_path, monkeypatch) -> Non
     assert run_helix(["status"], tmp_path) == 127
 
 
+def test_run_compose_executes_docker_compose_from_helix_project(tmp_path, monkeypatch) -> None:
+    calls = []
+
+    def fake_run(command, *, cwd, check):
+        calls.append({"command": command, "cwd": cwd, "check": check})
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("forensic_claw.cli.infra.subprocess.run", fake_run)
+
+    result = run_compose(["ps"], tmp_path)
+
+    assert result == 0
+    assert calls == [
+        {
+            "command": [
+                "docker",
+                "compose",
+                "-f",
+                str(tmp_path / "helix" / "docker-compose.yml"),
+                "ps",
+            ],
+            "cwd": tmp_path / "helix",
+            "check": False,
+        }
+    ]
+
+
 def test_infra_up_can_start_helix_backend(tmp_path, monkeypatch) -> None:
     calls = []
 
@@ -84,7 +117,19 @@ def test_infra_up_can_start_helix_backend(tmp_path, monkeypatch) -> None:
             "check": False,
         },
         {
-            "command": ["helix", "push", "dev"],
+            "command": ["helix", "build", "dev"],
+            "cwd": tmp_path / "helix",
+            "check": False,
+        },
+        {
+            "command": [
+                "docker",
+                "compose",
+                "-f",
+                str(tmp_path / "helix" / "docker-compose.yml"),
+                "up",
+                "-d",
+            ],
             "cwd": tmp_path / "helix",
             "check": False,
         },

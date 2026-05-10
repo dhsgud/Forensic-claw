@@ -49,7 +49,19 @@ def test_webui_has_graph_inspector_panel_and_message_action() -> None:
 
     assert 'id="graph-inspector-panel"' in html
     assert 'id="graph-canvas"' in html
+    assert 'id="graph-expand"' in html
+    assert 'id="graph-fullscreen"' in html
+    assert 'id="graph-zoom-out"' in html
+    assert 'id="graph-zoom-reset"' in html
+    assert 'id="graph-zoom-in"' in html
     assert "그래프로 확인하기" in app
     assert "function openGraphPanel" in app
+    assert "function toggleGraphFullscreen" in app
+    assert "function setGraphZoom" in app
+    assert "function panGraphBy" in app
+    assert "node.appendChild(actions)" in app
     assert "graphViews" in app
     assert ".graph-node.selected" in css
+    assert ".graph-inspector-panel.fullscreen" in css
+    assert ".workspace-body.graph-wide" in css
+    assert ".graph-zoom-controls" in css

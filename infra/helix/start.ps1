@@ -12,14 +12,20 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Error "Docker CLI was not found. Start Docker Desktop or install Docker first."
 }
 
-if (Get-Command cargo -ErrorAction SilentlyContinue) {
-    & $Helix check dev
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-} else {
-    Write-Host "Cargo was not found; skipping 'helix check dev'. 'helix push dev' will still compile queries before building Docker."
+& $Helix check dev
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 
-& $Helix push dev
+& $Helix build dev
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+docker compose -f docker-compose.yml up -d
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+docker compose -f docker-compose.yml ps
 exit $LASTEXITCODE

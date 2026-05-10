@@ -1,12 +1,19 @@
+param(
+    [switch] $DeleteData
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
-$LocalHelix = Join-Path $Root "bin\helix.exe"
-$Helix = if (Test-Path $LocalHelix) { $LocalHelix } else { "helix" }
 
-if (-not (Test-Path $LocalHelix) -and -not (Get-Command helix -ErrorAction SilentlyContinue)) {
-    Write-Error "Helix CLI was not found."
+docker compose -f docker-compose.yml down
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 
-& $Helix stop dev
-exit $LASTEXITCODE
+if ($DeleteData) {
+    $Volume = Join-Path $Root ".helix\.volumes\dev"
+    if (Test-Path $Volume) {
+        Remove-Item -LiteralPath $Volume -Recurse -Force
+    }
+}

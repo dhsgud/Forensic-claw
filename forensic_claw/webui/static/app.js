@@ -23,6 +23,12 @@ const state = {
   attachments: [],
   activeGraphView: null,
   selectedGraphNodeId: "",
+  graphPanelExpanded: false,
+  graphPanelFullscreen: false,
+  graphZoom: 1,
+  graphPanX: 0,
+  graphPanY: 0,
+  graphDrag: null,
   dragDepth: 0,
 };
 
@@ -61,8 +67,13 @@ const casesList = document.querySelector("#cases-list");
 const chatLog = document.querySelector("#chat-log");
 const workspaceBody = document.querySelector(".workspace-body");
 const graphInspectorPanel = document.querySelector("#graph-inspector-panel");
+const graphExpand = document.querySelector("#graph-expand");
+const graphFullscreen = document.querySelector("#graph-fullscreen");
 const graphClose = document.querySelector("#graph-close");
 const graphSummary = document.querySelector("#graph-summary");
+const graphZoomOut = document.querySelector("#graph-zoom-out");
+const graphZoomReset = document.querySelector("#graph-zoom-reset");
+const graphZoomIn = document.querySelector("#graph-zoom-in");
 const graphCanvas = document.querySelector("#graph-canvas");
 const graphDetail = document.querySelector("#graph-detail");
 const composerShell = document.querySelector(".composer-shell");
@@ -815,6 +826,7 @@ function attachGraphActions(node, graphViews) {
   node._graphViews = graphViews;
   const actions = document.createElement("div");
   actions.className = "graph-actions";
+  actions.setAttribute("aria-label", "Graph actions for this answer");
   for (const [index, view] of graphViews.entries()) {
     const button = document.createElement("button");
     button.type = "button";
@@ -824,18 +836,14 @@ function attachGraphActions(node, graphViews) {
     button.addEventListener("click", () => openGraphPanel(view));
     actions.appendChild(button);
   }
-  const thinking = node.querySelector(".message-thinking");
-  if (thinking) {
-    node.insertBefore(actions, thinking);
-  } else {
-    node.appendChild(actions);
-  }
+  node.appendChild(actions);
 }
 
 function openGraphPanel(view) {
   if (!graphInspectorPanel || !graphCanvas || !graphDetail) return;
   state.activeGraphView = view;
   state.selectedGraphNodeId = view.nodes[0]?.id || "";
+  resetGraphViewport();
   workspaceBody?.classList.remove("no-inspector");
   graphInspectorPanel.hidden = false;
   renderGraphPanel();
@@ -844,15 +852,108 @@ function openGraphPanel(view) {
 function closeGraphPanel() {
   state.activeGraphView = null;
   state.selectedGraphNodeId = "";
+  state.graphPanelFullscreen = false;
+  resetGraphViewport();
   if (graphInspectorPanel) graphInspectorPanel.hidden = true;
   if (graphCanvas) graphCanvas.innerHTML = "";
   if (graphDetail) graphDetail.innerHTML = "";
+  applyGraphPanelMode();
   workspaceBody?.classList.add("no-inspector");
+}
+
+function graphViewport() {
+  if (state.graphPanelFullscreen) return { width: 1440, height: 920 };
+  if (state.graphPanelExpanded) return { width: 1180, height: 760 };
+  return { width: 900, height: 620 };
+}
+
+function clampGraphZoom(value) {
+  return Math.min(4, Math.max(0.5, value));
+}
+
+function resetGraphViewport() {
+  state.graphZoom = 1;
+  state.graphPanX = 0;
+  state.graphPanY = 0;
+  state.graphDrag = null;
+  updateGraphZoomControls();
+}
+
+function updateGraphZoomControls() {
+  const percent = `${Math.round(state.graphZoom * 100)}%`;
+  if (graphZoomReset) {
+    graphZoomReset.textContent = percent;
+    graphZoomReset.title = "100%로 초기화";
+  }
+  if (graphZoomOut) graphZoomOut.disabled = state.graphZoom <= 0.5;
+  if (graphZoomIn) graphZoomIn.disabled = state.graphZoom >= 4;
+}
+
+function graphViewBox(viewport) {
+  const zoom = clampGraphZoom(state.graphZoom || 1);
+  const width = viewport.width / zoom;
+  const height = viewport.height / zoom;
+  return {
+    x: (viewport.width - width) / 2 - state.graphPanX,
+    y: (viewport.height - height) / 2 - state.graphPanY,
+    width,
+    height,
+  };
+}
+
+function setGraphZoom(nextZoom) {
+  state.graphZoom = clampGraphZoom(nextZoom);
+  updateGraphZoomControls();
+  renderGraphCanvas(state.activeGraphView);
+}
+
+function zoomGraphBy(factor) {
+  setGraphZoom(state.graphZoom * factor);
+}
+
+function panGraphBy(clientDx, clientDy) {
+  if (!graphCanvas) return;
+  const rect = graphCanvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const viewport = graphViewport();
+  const box = graphViewBox(viewport);
+  state.graphPanX += clientDx * (box.width / rect.width);
+  state.graphPanY += clientDy * (box.height / rect.height);
+  renderGraphCanvas(state.activeGraphView);
+}
+
+function applyGraphPanelMode() {
+  workspaceBody?.classList.toggle("graph-wide", state.graphPanelExpanded && !state.graphPanelFullscreen);
+  graphInspectorPanel?.classList.toggle("expanded", state.graphPanelExpanded);
+  graphInspectorPanel?.classList.toggle("fullscreen", state.graphPanelFullscreen);
+  document.body.classList.toggle("graph-fullscreen-active", state.graphPanelFullscreen);
+  if (graphExpand) {
+    graphExpand.setAttribute("aria-pressed", String(state.graphPanelExpanded));
+    graphExpand.title = state.graphPanelExpanded ? "기본 폭으로 보기" : "넓게 보기";
+  }
+  if (graphFullscreen) {
+    graphFullscreen.setAttribute("aria-pressed", String(state.graphPanelFullscreen));
+    graphFullscreen.title = state.graphPanelFullscreen ? "전체화면 닫기" : "전체화면";
+  }
+  updateGraphZoomControls();
+}
+
+function toggleGraphPanelExpanded() {
+  state.graphPanelExpanded = !state.graphPanelExpanded;
+  applyGraphPanelMode();
+  renderGraphPanel();
+}
+
+function toggleGraphFullscreen() {
+  state.graphPanelFullscreen = !state.graphPanelFullscreen;
+  applyGraphPanelMode();
+  renderGraphPanel();
 }
 
 function renderGraphPanel() {
   const view = state.activeGraphView;
   if (!view || !graphCanvas || !graphSummary || !graphDetail) return;
+  applyGraphPanelMode();
   graphSummary.textContent = `${view.title} - ${view.nodes.length} nodes / ${view.edges.length} edges`;
   renderGraphCanvas(view);
   const selected = view.nodes.find((node) => node.id === state.selectedGraphNodeId) || view.nodes[0] || null;
@@ -872,14 +973,24 @@ function graphNodeColor(kind) {
   return palette[String(kind || "").toUpperCase()] || "#3b82f6";
 }
 
-function graphLayout(nodes) {
-  const width = 680;
-  const height = 420;
+function graphLayout(nodes, viewport) {
+  const width = viewport.width;
+  const height = viewport.height;
   const cx = width / 2;
   const cy = height / 2;
-  const radius = Math.min(width, height) * 0.36;
+  const rings = nodes.length > 14 ? 2 : 1;
+  const outerRadius = Math.min(width, height) * (rings > 1 ? 0.39 : 0.36);
+  const innerRadius = outerRadius * 0.55;
   return nodes.map((node, index) => {
-    const angle = nodes.length <= 1 ? 0 : (Math.PI * 2 * index) / nodes.length - Math.PI / 2;
+    const ring = rings > 1 && index % 3 === 0 ? 0 : 1;
+    const ringNodes = rings > 1
+      ? nodes.filter((_item, itemIndex) => (itemIndex % 3 === 0 ? 0 : 1) === ring).length
+      : nodes.length;
+    const ringIndex = rings > 1
+      ? nodes.slice(0, index).filter((_item, itemIndex) => (itemIndex % 3 === 0 ? 0 : 1) === ring).length
+      : index;
+    const radius = rings > 1 && ring === 0 ? innerRadius : outerRadius;
+    const angle = nodes.length <= 1 ? 0 : (Math.PI * 2 * ringIndex) / Math.max(ringNodes, 1) - Math.PI / 2;
     return {
       ...node,
       x: nodes.length <= 1 ? cx : cx + Math.cos(angle) * radius,
@@ -889,19 +1000,25 @@ function graphLayout(nodes) {
 }
 
 function renderGraphCanvas(view) {
-  const positioned = graphLayout(view.nodes);
+  if (!view || !graphCanvas) return;
+  const viewport = graphViewport();
+  const box = graphViewBox(viewport);
+  const positioned = graphLayout(view.nodes, viewport);
   const byId = new Map(positioned.map((node) => [node.id, node]));
+  const labelLimit = state.graphPanelFullscreen ? 34 : state.graphPanelExpanded ? 28 : 22;
+  const nodeRadius = state.graphPanelFullscreen ? 22 : state.graphPanelExpanded ? 19 : 16;
   const edges = view.edges
     .map((edge) => ({ ...edge, sourceNode: byId.get(edge.source), targetNode: byId.get(edge.target) }))
     .filter((edge) => edge.sourceNode && edge.targetNode);
   const nodeMarkup = positioned.map((node) => {
     const selected = node.id === state.selectedGraphNodeId;
     const color = graphNodeColor(node.kind);
-    const label = node.label.length > 22 ? `${node.label.slice(0, 19)}...` : node.label;
+    const label = node.label.length > labelLimit ? `${node.label.slice(0, labelLimit - 3)}...` : node.label;
+    const radius = selected ? nodeRadius + 4 : nodeRadius;
     return `
       <g class="graph-node${selected ? " selected" : ""}" data-node-id="${escapeAttribute(node.id)}" tabindex="0" role="button">
-        <circle cx="${node.x.toFixed(1)}" cy="${node.y.toFixed(1)}" r="${selected ? 18 : 15}" fill="${color}"></circle>
-        <text x="${node.x.toFixed(1)}" y="${(node.y + 31).toFixed(1)}" text-anchor="middle">${escapeHtml(label)}</text>
+        <circle cx="${node.x.toFixed(1)}" cy="${node.y.toFixed(1)}" r="${radius}" fill="${color}"></circle>
+        <text x="${node.x.toFixed(1)}" y="${(node.y + radius + 18).toFixed(1)}" text-anchor="middle">${escapeHtml(label)}</text>
         <title>${escapeHtml(`${node.kind}: ${node.label}`)}</title>
       </g>
     `;
@@ -916,14 +1033,20 @@ function renderGraphCanvas(view) {
       </g>
     `;
   }).join("");
+  const sizeClass = state.graphPanelFullscreen
+    ? " graph-svg-fullscreen"
+    : state.graphPanelExpanded
+      ? " graph-svg-expanded"
+      : "";
 
   graphCanvas.innerHTML = `
-    <svg class="graph-svg" viewBox="0 0 680 420" role="img" aria-label="Evidence relationship graph">
-      <rect x="0" y="0" width="680" height="420" rx="8"></rect>
+    <svg class="graph-svg${sizeClass}" viewBox="${box.x.toFixed(2)} ${box.y.toFixed(2)} ${box.width.toFixed(2)} ${box.height.toFixed(2)}" role="img" aria-label="Evidence relationship graph">
+      <rect x="0" y="0" width="${viewport.width}" height="${viewport.height}" rx="8"></rect>
       ${edgeMarkup}
       ${nodeMarkup}
     </svg>
   `;
+  updateGraphZoomControls();
   graphCanvas.querySelectorAll(".graph-node").forEach((element) => {
     const activate = () => {
       state.selectedGraphNodeId = element.getAttribute("data-node-id") || "";
@@ -2195,7 +2318,44 @@ knowledgeSave?.addEventListener("click", () => {
   });
 });
 
+graphExpand?.addEventListener("click", toggleGraphPanelExpanded);
+graphFullscreen?.addEventListener("click", toggleGraphFullscreen);
 graphClose?.addEventListener("click", closeGraphPanel);
+graphZoomOut?.addEventListener("click", () => zoomGraphBy(1 / 1.2));
+graphZoomIn?.addEventListener("click", () => zoomGraphBy(1.2));
+graphZoomReset?.addEventListener("click", () => {
+  resetGraphViewport();
+  renderGraphCanvas(state.activeGraphView);
+});
+graphCanvas?.addEventListener("wheel", (event) => {
+  if (!state.activeGraphView) return;
+  event.preventDefault();
+  zoomGraphBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+}, { passive: false });
+graphCanvas?.addEventListener("pointerdown", (event) => {
+  if (!state.activeGraphView || event.button !== 0) return;
+  if (event.target?.closest?.(".graph-node")) return;
+  state.graphDrag = { x: event.clientX, y: event.clientY };
+  graphCanvas.classList.add("is-panning");
+});
+document.addEventListener("pointermove", (event) => {
+  if (!state.graphDrag) return;
+  const dx = event.clientX - state.graphDrag.x;
+  const dy = event.clientY - state.graphDrag.y;
+  state.graphDrag = { x: event.clientX, y: event.clientY };
+  panGraphBy(dx, dy);
+});
+document.addEventListener("pointerup", () => {
+  state.graphDrag = null;
+  graphCanvas?.classList.remove("is-panning");
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.graphPanelFullscreen) {
+    state.graphPanelFullscreen = false;
+    applyGraphPanelMode();
+    renderGraphPanel();
+  }
+});
 
 setupProvider?.addEventListener("change", syncSetupDefaultApiBaseFromProvider);
 setupKnowledgeBackend?.addEventListener("change", syncSetupKnowledgeBackendUi);
