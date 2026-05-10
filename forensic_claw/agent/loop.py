@@ -24,6 +24,7 @@ from forensic_claw.agent.tools.filesystem import (
     ReadFileTool,
     WriteFileTool,
 )
+from forensic_claw.agent.tools.hashing import HashVerifyTool
 from forensic_claw.agent.tools.knowledge import (
     KnowledgeIngestTool,
     KnowledgeSearchTool,
@@ -249,6 +250,7 @@ class AgentLoop:
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
         self.tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read))
+        self.tools.register(HashVerifyTool(workspace=self.workspace, allowed_dir=allowed_dir))
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         if self.exec_config.enable:

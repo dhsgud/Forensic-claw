@@ -1098,6 +1098,27 @@ function attachmentLabel(item) {
   return item.status || "stored";
 }
 
+function attachmentHashLabel(item) {
+  const hashes = item.hashes || {};
+  const entries = [
+    ["MD5", hashes.md5],
+    ["SHA256", hashes.sha256 || item.sha256],
+    ["SHA512", hashes.sha512],
+  ].filter(([, value]) => value);
+  if (!entries.length) return "";
+  return entries.map(([label, value]) => `${label} ${value.slice(0, 12)}...`).join(" | ");
+}
+
+function attachmentHashTitle(item) {
+  const hashes = item.hashes || {};
+  const entries = [
+    ["MD5", hashes.md5],
+    ["SHA256", hashes.sha256 || item.sha256],
+    ["SHA512", hashes.sha512],
+  ].filter(([, value]) => value);
+  return entries.map(([label, value]) => `${label}: ${value}`).join("\n");
+}
+
 function renderAttachments() {
   if (!attachmentTray) return;
   attachmentTray.hidden = state.attachments.length === 0;
@@ -1107,10 +1128,16 @@ function renderAttachments() {
     chip.className = "attachment-chip";
     chip.classList.toggle("is-error", Boolean(item.error));
     chip.classList.toggle("is-busy", item.status === "uploading" || item.status === "processing");
+    const hashLabel = attachmentHashLabel(item);
+    const hashTitle = attachmentHashTitle(item);
+    if (hashTitle) {
+      chip.title = hashTitle;
+    }
     chip.innerHTML = `
       <div class="attachment-main">
         <strong>${escapeHtml(item.fileName || item.name || "file")}</strong>
         <small>${escapeHtml(item.kind || "file")} - ${escapeHtml(formatBytes(item.sizeBytes || item.size || 0))} - ${escapeHtml(attachmentLabel(item))}</small>
+        ${hashLabel ? `<small>${escapeHtml(hashLabel)}</small>` : ""}
       </div>
       <button class="attachment-remove" type="button" aria-label="Remove attachment">x</button>
     `;

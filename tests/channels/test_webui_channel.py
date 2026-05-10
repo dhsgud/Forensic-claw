@@ -485,6 +485,8 @@ async def test_webui_upload_api_indexes_text_file_when_knowledge_service_is_boun
         payload = await response.json()
         assert payload["upload"]["kind"] == "text"
         assert payload["upload"]["status"] == "ready"
+        assert payload["upload"]["sha256"] == payload["upload"]["hashes"]["sha256"]
+        assert set(payload["upload"]["hashes"]) == {"md5", "sha256", "sha512"}
         assert payload["upload"]["ingest"]["chunks"] >= 1
         assert knowledge_service.search("powershell 10.0.0.5")["hits"]
     finally:
@@ -543,6 +545,8 @@ async def test_webui_chat_publishes_attachment_context_when_upload_is_referenced
         assert inbound.chat_id == "sess_upload"
         assert "Attached Evidence Context" in inbound.content
         assert "events.log" in inbound.content
+        assert "Hashes: MD5=" in inbound.content
+        assert "SHA512=" in inbound.content
         assert "첨부 파일을 분석해줘." in inbound.content
         assert inbound.media == []
         assert inbound.metadata["attachments"][0]["uploadId"] == upload_id

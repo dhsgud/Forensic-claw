@@ -19,3 +19,14 @@ def test_webui_exposes_backend_specific_database_test_controls() -> None:
     assert "setup-test-neo4j" not in app
     assert "Test ${knowledgeBackendLabel(backend)}" in app
     assert "${label} test succeeded" in app
+
+
+def test_webui_attachment_tray_exposes_upload_hashes() -> None:
+    html = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+
+    assert "hash-20260510" in html
+    assert "function attachmentHashLabel" in app
+    assert "function attachmentHashTitle" in app
+    assert "SHA256" in app
+    assert "SHA512" in app

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import struct
 
 from forensic_claw.config.schema import KnowledgeConfig
@@ -25,14 +26,24 @@ def test_save_bytes_indexes_text_upload_when_knowledge_service_is_available(tmp_
 
     assert record.kind == "text"
     assert record.status == "ready"
+    assert record.hashes == {
+        "md5": hashlib.md5(b"2026-05-09 powershell.exe connected to 10.0.0.5").hexdigest(),
+        "sha256": hashlib.sha256(b"2026-05-09 powershell.exe connected to 10.0.0.5").hexdigest(),
+        "sha512": hashlib.sha512(b"2026-05-09 powershell.exe connected to 10.0.0.5").hexdigest(),
+    }
+    assert record.sha256 == record.hashes["sha256"]
     assert record.ingest["chunks"] >= 1
     assert knowledge_service.search("powershell 10.0.0.5")["hits"]
 
     loaded = upload_service.load(record.upload_id)
     assert loaded.file_name == "security.log"
+    assert loaded.hashes == record.hashes
     context = build_attachment_context([loaded])
     assert "Attached Evidence Context" in context
     assert "security.log" in context
+    assert "Hashes: MD5=" in context
+    assert "SHA256=" in context
+    assert "SHA512=" in context
     assert "knowledge_search" in context
 
 

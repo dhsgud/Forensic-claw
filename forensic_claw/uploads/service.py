@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import uuid
@@ -13,6 +12,7 @@ from typing import Any
 
 from loguru import logger
 
+from forensic_claw.utils.hashing import DEFAULT_HASH_ALGORITHMS, calculate_file_hashes
 from forensic_claw.vision import VisionInterpretationService
 
 _TEXT_EXTENSIONS = {
@@ -62,6 +62,7 @@ class UploadRecord:
     case_name: str | None = None
     investigator_name: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    hashes: dict[str, str] = field(default_factory=dict)
     ingest: dict[str, Any] = field(default_factory=dict)
     vision: dict[str, Any] = field(default_factory=dict)
 
@@ -135,6 +136,14 @@ def build_attachment_context(records: list[UploadRecord]) -> str:
             f"{index}. {record.file_name} | kind={record.kind} | status={record.status} | "
             f"sha256={record.sha256} | sizeBytes={record.size_bytes}"
         )
+        if record.hashes:
+            lines.append(
+                "   Hashes: "
+                + " ".join(
+                    f"{algorithm.upper()}={digest}"
+                    for algorithm, digest in sorted(record.hashes.items())
+                )
+            )
         lines.append(f"   storedPath={record.stored_path}")
         if record.ingest:
             lines.append(
@@ -189,6 +198,7 @@ class UploadService:
         upload_dir.mkdir(parents=True, exist_ok=True)
         target = upload_dir / safe_name
         target.write_bytes(content)
+        hashes = calculate_file_hashes(target, DEFAULT_HASH_ALGORITHMS)
         logger.info(
             "WebUI upload stored: uploadId={} sessionId={} fileName={} sizeBytes={}",
             upload_id,
@@ -203,7 +213,7 @@ class UploadService:
             file_name=safe_name,
             stored_path=str(target),
             size_bytes=target.stat().st_size,
-            sha256=_sha256(target),
+            sha256=hashes["sha256"],
             kind=classify_upload(safe_name),
             status="stored",
             processor="none",
@@ -212,13 +222,14 @@ class UploadService:
             case_name=case_name or None,
             investigator_name=investigator_name or None,
             metadata={"extension": target.suffix.lower()},
+            hashes=hashes,
         )
         logger.debug(
-            "WebUI upload classified: uploadId={} kind={} extension={} sha256={}",
+            "WebUI upload classified: uploadId={} kind={} extension={} hashes={}",
             record.upload_id,
             record.kind,
             record.metadata.get("extension"),
-            record.sha256,
+            record.hashes,
         )
         processed = self._process(record, upload_dir)
         self._save_record(processed, upload_dir)
@@ -385,11 +396,3 @@ class UploadService:
 def _safe_segment(value: str) -> str:
     clean = _SAFE_SEGMENT_RE.sub("_", str(value or "session")).strip("._-")
     return clean[:80] or "session"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
