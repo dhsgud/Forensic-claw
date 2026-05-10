@@ -30,3 +30,11 @@ def test_webui_attachment_tray_exposes_upload_hashes() -> None:
     assert "function attachmentHashTitle" in app
     assert "SHA256" in app
     assert "SHA512" in app
+
+
+def test_webui_slash_menu_is_backed_by_bootstrap_commands() -> None:
+    app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+
+    assert "state.commands = data.commands || []" in app
+    assert "function renderSlashMenu" in app
+    assert "applySlashCommand(item.command)" in app

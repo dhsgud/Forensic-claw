@@ -419,6 +419,7 @@ async def test_webui_bootstrap_and_chat_publish_scoped_inbound(tmp_path: Path) -
         assert session_id.startswith("sess_")
         assert any(item["command"] == "/help" for item in bootstrap["commands"])
         assert any(item["command"] == "/status" for item in bootstrap["commands"])
+        assert any(item["command"] == "/hash" for item in bootstrap["commands"])
 
         response = await client.post(
             "/api/chat",

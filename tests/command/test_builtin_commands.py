@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from forensic_claw.bus.events import InboundMessage
-from forensic_claw.command.builtin import cmd_new
+from forensic_claw.command.builtin import cmd_hash, cmd_new, get_builtin_command_specs
 from forensic_claw.command.router import CommandContext
 from forensic_claw.session.manager import SessionManager
 
@@ -38,6 +38,81 @@ async def test_cmd_new_flags_webui_browser_session_reset(tmp_path: Path) -> None
 
     for task in scheduled:
         task.close()
+
+
+def _hash_ctx(tmp_path: Path, args: str, *, restrict_to_workspace: bool = False) -> CommandContext:
+    return CommandContext(
+        msg=InboundMessage(
+            channel="webui",
+            sender_id="user",
+            chat_id="sess_hash",
+            content=f"/hash {args}".strip(),
+        ),
+        session=None,
+        key="webui:sess_hash",
+        raw=f"/hash {args}".strip(),
+        args=args,
+        loop=SimpleNamespace(workspace=tmp_path, restrict_to_workspace=restrict_to_workspace),
+    )
+
+
+@pytest.mark.asyncio
+async def test_cmd_hash_returns_integrity_hashes_for_relative_file(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence.bin"
+    evidence.write_bytes(b"hash this evidence")
+
+    outbound = await cmd_hash(_hash_ctx(tmp_path, "evidence.bin"))
+
+    assert "File hash verification:" in outbound.content
+    assert f"- file: {evidence}" in outbound.content
+    assert "- MD5:" in outbound.content
+    assert "- SHA256:" in outbound.content
+    assert "- SHA512:" in outbound.content
+    assert outbound.metadata == {"render_as": "text"}
+
+
+@pytest.mark.asyncio
+async def test_cmd_hash_finds_unique_file_name_inside_workspace(tmp_path: Path) -> None:
+    evidence = tmp_path / "uploads" / "sessions" / "sess_1" / "upl_abc" / "History"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_bytes(b"chrome history")
+
+    outbound = await cmd_hash(_hash_ctx(tmp_path, "History"))
+
+    assert f"- file: {evidence}" in outbound.content
+    assert "- SHA256:" in outbound.content
+
+
+@pytest.mark.asyncio
+async def test_cmd_hash_verifies_expected_sha256_when_supplied(tmp_path: Path) -> None:
+    evidence = tmp_path / "artifact.log"
+    evidence.write_text("powershell launched", encoding="utf-8")
+
+    first = await cmd_hash(_hash_ctx(tmp_path, "artifact.log"))
+    sha256_line = next(line for line in first.content.splitlines() if line.startswith("- SHA256:"))
+    expected = sha256_line.split(":", 1)[1].strip()
+
+    outbound = await cmd_hash(_hash_ctx(tmp_path, f"artifact.log sha256={expected.upper()}"))
+
+    assert "- verification: OK" in outbound.content
+    assert "SHA256: match" in outbound.content
+
+
+@pytest.mark.asyncio
+async def test_cmd_hash_blocks_outside_file_when_workspace_is_restricted(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-hash.bin"
+    outside.write_bytes(b"outside")
+
+    outbound = await cmd_hash(_hash_ctx(tmp_path, str(outside), restrict_to_workspace=True))
+
+    assert "Hash command denied:" in outbound.content
+    assert "outside workspace" in outbound.content
+
+
+def test_builtin_command_specs_include_hash_command() -> None:
+    commands = {item.command for item in get_builtin_command_specs()}
+
+    assert "/hash" in commands
 
 
 @pytest.mark.asyncio
