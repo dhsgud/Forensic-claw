@@ -8,7 +8,7 @@ from forensic_claw.knowledge.service import KnowledgeService
 
 
 def _config() -> KnowledgeConfig:
-    return KnowledgeConfig(neo4j={"enabled": False}, chunk_chars=1000, chunk_overlap_chars=0)
+    return KnowledgeConfig(chunk_chars=1000, chunk_overlap_chars=0)
 
 
 def _write_chrome_history(path):
@@ -70,6 +70,9 @@ def test_ingest_path_indexes_large_text_log_and_graph_entities_when_log_contains
     assert "powershell.exe" in search["hits"][0]["text"]
     graph = service.store.graph_search("10.0.0.5")
     assert graph[0]["kind"] == "IP"
+    graph_view = search["graphView"]
+    assert any(node["kind"] == "IP" and node["label"] == "10.0.0.5" for node in graph_view["nodes"])
+    assert any(edge["label"] == "MENTIONS" for edge in graph_view["edges"])
 
 
 def test_ingest_path_extracts_chrome_history_rows_when_file_is_history_database(tmp_path):

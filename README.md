@@ -46,7 +46,7 @@ WebUI가 열리면 아래 항목을 입력합니다.
 - 케이스 이름
 - 수사관 이름
 - Local LLM API Base
-- Neo4j 설정
+- Knowledge backend 선택
 
 Local LLM 예시:
 
@@ -56,27 +56,19 @@ Ollama:    http://127.0.0.1:11434/v1
 vLLM:      http://127.0.0.1:8000/v1
 ```
 
-Neo4j를 Docker로 사용할 경우:
+기본값은 별도 서버가 필요 없는 `Local RAG + Graph Index`입니다.
+HelixDB를 사용할 경우:
 
 ```powershell
-.\Forensic-Claw.exe infra init --backend docker
-.\Forensic-Claw.exe infra up --backend docker
+.\Forensic-Claw.exe infra init --backend helix
+.\Forensic-Claw.exe infra up --backend helix
 ```
 
-WebUI Neo4j 설정:
+WebUI HelixDB 설정:
 
 ```text
-URI: bolt://127.0.0.1:7687
-Username: neo4j
-Password: forensic1234
-Database: neo4j
-```
-
-Docker를 사용할 수 없는 조사 PC에서는 Native 또는 External backend를 선택합니다.
-
-```powershell
-.\Forensic-Claw.exe infra init --backend native
-.\Forensic-Claw.exe infra init --backend external
+Backend: HelixDB
+Endpoint: http://127.0.0.1:6969
 ```
 
 자세한 Windows 배포 문서는 [Windows Native Packaging](docs/WINDOWS_NATIVE_PACKAGING.md)을 참고하세요.
@@ -113,7 +105,7 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - cron
 - heartbeat
 - WebUI chat, session, streaming, shell trace, read-only case explorer
-- Local RAG + Neo4j knowledge preparation for large logs and Chrome History databases
+- Local RAG + graph knowledge preparation for large logs and Chrome History databases
 - channel plugin discovery via `forensic_claw.channels`
 - Native Windows baseline and Windows CI
 

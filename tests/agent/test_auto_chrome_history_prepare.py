@@ -66,7 +66,6 @@ async def test_chrome_history_request_prepares_knowledge_before_llm_answer(tmp_p
         workspace=tmp_path / "workspace",
         enforce_response_language=False,
         knowledge_config=KnowledgeConfig(
-            neo4j={"enabled": False},
             chunk_chars=1000,
             chunk_overlap_chars=0,
         ),

@@ -941,6 +941,7 @@ class AgentLoop:
             )
             turn_skip = 1 + len(history)
             thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
+            graph_views = self._collect_turn_graph_views(all_msgs, skip=turn_skip)
             self._save_turn(session, all_msgs, turn_skip)
             self.sessions.save(session)
             self._schedule_background(self.memory_consolidator.maybe_consolidate_by_tokens(session))
@@ -949,6 +950,8 @@ class AgentLoop:
                 meta["thinking_text"] = thinking_text
             if thinking_blocks:
                 meta["thinking_blocks"] = thinking_blocks
+            if graph_views:
+                meta["graph_views"] = graph_views
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -974,7 +977,7 @@ class AgentLoop:
             return result
 
         if self._should_auto_prepare_chrome_history(msg):
-            progress_text = "Chrome History DB를 자동으로 찾고 RAG/Neo4j 전처리를 시작합니다."
+            progress_text = "Chrome History DB를 자동으로 찾고 RAG/그래프 전처리를 시작합니다."
             if on_progress:
                 await on_progress(progress_text)
             elif msg.channel == "webui":
@@ -1061,6 +1064,7 @@ class AgentLoop:
 
         turn_skip = 1 + len(history)
         thinking_text, thinking_blocks = self._collect_turn_thinking(all_msgs, skip=turn_skip)
+        graph_views = self._collect_turn_graph_views(all_msgs, skip=turn_skip)
         self._save_turn(session, all_msgs, turn_skip)
 
         if self.reset_session_after_answer:
@@ -1082,6 +1086,8 @@ class AgentLoop:
             meta["thinking_text"] = thinking_text
         if thinking_blocks:
             meta["thinking_blocks"] = thinking_blocks
+        if graph_views:
+            meta["graph_views"] = graph_views
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
             metadata=meta,
@@ -1194,6 +1200,113 @@ class AgentLoop:
                 seen.add(part)
 
         return ("\n\n".join(deduped) if deduped else None, blocks or None)
+
+    @classmethod
+    def _collect_turn_graph_views(
+        cls,
+        messages: list[dict[str, Any]],
+        *,
+        skip: int,
+    ) -> list[dict[str, Any]]:
+        """Extract visualization-ready graph payloads from knowledge tool outputs."""
+        views: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for message in messages[skip:]:
+            if message.get("role") != "tool" or message.get("name") != "knowledge_search":
+                continue
+            content = message.get("content")
+            if not isinstance(content, str):
+                continue
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+            view = cls._normalize_graph_view(payload)
+            if not view:
+                continue
+            key = json.dumps(
+                {
+                    "query": view.get("query"),
+                    "nodes": [node.get("id") for node in view.get("nodes", [])],
+                    "edges": [edge.get("id") for edge in view.get("edges", [])],
+                },
+                sort_keys=True,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            views.append(view)
+        return views[:3]
+
+    @classmethod
+    def _normalize_graph_view(cls, payload: dict[str, Any]) -> dict[str, Any] | None:
+        raw_view = payload.get("graphView") if isinstance(payload.get("graphView"), dict) else {}
+        raw_nodes = raw_view.get("nodes") or raw_view.get("entities") or payload.get("nodes") or payload.get("entities") or payload.get("graph") or []
+        raw_edges = raw_view.get("edges") or raw_view.get("relationships") or payload.get("edges") or payload.get("relationships") or []
+        nodes = [node for node in (cls._graph_node(item) for item in cls._as_list(raw_nodes)) if node]
+        edges = [edge for edge in (cls._graph_edge(item) for item in cls._as_list(raw_edges)) if edge]
+        if not nodes and not edges:
+            return None
+        node_ids = {node["id"] for node in nodes}
+        for edge in edges:
+            for node_id in (edge["source"], edge["target"]):
+                if node_id and node_id not in node_ids:
+                    nodes.append({"id": node_id, "label": node_id, "kind": "Node", "group": "Node", "metadata": {}})
+                    node_ids.add(node_id)
+        return {
+            "title": "Evidence Relationship Graph",
+            "query": str(payload.get("query") or ""),
+            "source": str(payload.get("backend") or "knowledge_search"),
+            "nodes": nodes[:80],
+            "edges": edges[:160],
+        }
+
+    @staticmethod
+    def _as_list(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    @staticmethod
+    def _graph_node(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        node_id = str(value.get("id") or value.get("entity_id") or value.get("value") or "").strip()
+        if not node_id:
+            return None
+        label = str(value.get("label") or value.get("value") or value.get("path") or node_id)
+        kind = str(value.get("kind") or value.get("group") or value.get("type") or "Node")
+        metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else dict(value)
+        return {
+            "id": node_id,
+            "label": label,
+            "kind": kind,
+            "group": str(value.get("group") or kind),
+            "degree": int(value.get("degree", 0) or 0),
+            "metadata": metadata,
+        }
+
+    @staticmethod
+    def _graph_edge(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        source = str(value.get("source") or value.get("source_id") or value.get("from") or "").strip()
+        target = str(value.get("target") or value.get("target_id") or value.get("to") or "").strip()
+        if not source or not target:
+            return None
+        label = str(value.get("label") or value.get("type") or value.get("rel_type") or "RELATED")
+        edge_id = str(value.get("id") or value.get("relationship_id") or f"{source}:{label}:{target}")
+        metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else dict(value)
+        return {
+            "id": edge_id,
+            "source": source,
+            "target": target,
+            "label": label,
+            "type": label,
+            "metadata": metadata,
+        }
 
     async def process_direct(
         self,

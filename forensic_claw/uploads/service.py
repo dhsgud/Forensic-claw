@@ -152,7 +152,6 @@ def build_attachment_context(records: list[UploadRecord]) -> str:
                 f"chunks={record.ingest.get('chunks', 0)} "
                 f"entities={record.ingest.get('entities', 0)} "
                 f"relationships={record.ingest.get('relationships', 0)} "
-                f"neo4j={json.dumps(record.ingest.get('neo4j') or {}, ensure_ascii=False)} "
                 f"helix={json.dumps(record.ingest.get('helix') or {}, ensure_ascii=False)}"
             )
         if record.vision:
@@ -165,7 +164,7 @@ def build_attachment_context(records: list[UploadRecord]) -> str:
 
 
 class UploadService:
-    """Stage uploads and route them into RAG, Neo4j, or image interpretation."""
+    """Stage uploads and route them into RAG, graph storage, or image interpretation."""
 
     def __init__(
         self,
@@ -350,7 +349,6 @@ class UploadService:
             "entities": result.entities,
             "relationships": result.relationships,
             "errors": list(result.errors),
-            "neo4j": dict(result.neo4j or {}),
             "helix": dict(result.helix or {}),
         }
         record.status = "ready" if result.ready else "stored"

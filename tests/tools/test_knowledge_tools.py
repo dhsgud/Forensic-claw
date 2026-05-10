@@ -15,7 +15,7 @@ async def test_knowledge_ingest_tool_returns_ready_when_log_is_indexed(tmp_path)
     log.write_text("cmd.exe contacted 192.168.1.10\n", encoding="utf-8")
     service = KnowledgeService(
         tmp_path,
-        KnowledgeConfig(neo4j={"enabled": False}, chunk_chars=1000, chunk_overlap_chars=0),
+        KnowledgeConfig(chunk_chars=1000, chunk_overlap_chars=0),
     )
     tool = KnowledgeIngestTool(service, workspace=tmp_path, allowed_dir=tmp_path)
 
@@ -31,7 +31,7 @@ async def test_knowledge_search_tool_returns_indexed_chunks_and_graph_hits(tmp_p
     log.write_text("chrome.exe opened https://example.org/path\n", encoding="utf-8")
     service = KnowledgeService(
         tmp_path,
-        KnowledgeConfig(neo4j={"enabled": False}, chunk_chars=1000, chunk_overlap_chars=0),
+        KnowledgeConfig(chunk_chars=1000, chunk_overlap_chars=0),
     )
     service.ingest_path(log)
     tool = KnowledgeSearchTool(service, workspace=tmp_path)

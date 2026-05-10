@@ -191,6 +191,8 @@ class WebUIChannel(BaseChannel):
                 event["thinkingText"] = metadata["thinking_text"]
             if metadata.get("thinking_blocks"):
                 event["thinkingBlocks"] = metadata["thinking_blocks"]
+            if metadata.get("graph_views"):
+                event["graphViews"] = metadata["graph_views"]
             if metadata.get("webui_reset_browser_session"):
                 event["resetBrowserSession"] = True
 
@@ -604,21 +606,11 @@ class WebUIChannel(BaseChannel):
 
     @staticmethod
     def _knowledge_config_args(body: dict[str, Any]) -> dict[str, Any]:
-        neo4j = body.get("neo4j") if isinstance(body.get("neo4j"), dict) else {}
         helix = body.get("helix") if isinstance(body.get("helix"), dict) else {}
         return {
             "enabled": body.get("enabled"),
             "backend": body.get("backend"),
             "store_dir": body.get("storeDir", body.get("store_dir")),
-            "neo4j_enabled": body.get(
-                "neo4jEnabled",
-                body.get("neo4j_enabled", neo4j.get("enabled")),
-            ),
-            "uri": body.get("uri", neo4j.get("uri")),
-            "username": body.get("username", neo4j.get("username")),
-            "password": body.get("password", neo4j.get("password")),
-            "password_supplied": "password" in body or "password" in neo4j,
-            "database": body.get("database", neo4j.get("database")),
             "helix_enabled": body.get("helixEnabled", body.get("helix_enabled", helix.get("enabled"))),
             "helix_local": body.get("helixLocal", body.get("helix_local", helix.get("local"))),
             "helix_port": body.get("helixPort", body.get("helix_port", helix.get("port"))),
@@ -670,12 +662,7 @@ class WebUIChannel(BaseChannel):
         result = await asyncio.to_thread(
             self._knowledge_settings.test_connection,
             backend=args["backend"],
-            enabled=args["neo4j_enabled"],
-            uri=args["uri"],
-            username=args["username"],
-            password=args["password"],
-            password_supplied=args["password_supplied"],
-            database=args["database"],
+            enabled=args["enabled"],
             helix_enabled=args["helix_enabled"],
             helix_local=args["helix_local"],
             helix_port=args["helix_port"],

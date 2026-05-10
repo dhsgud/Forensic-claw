@@ -368,6 +368,65 @@ class KnowledgeStore:
             for row in rows
         ]
 
+    def graph_view(self, query: str, *, limit: int = 80) -> dict[str, list[dict[str, Any]]]:
+        """Return nodes and edges near graph entities that match a query."""
+        seeds = self.graph_search(query, limit=max(1, min(limit, 24)))
+        if not seeds:
+            return {"nodes": [], "edges": []}
+
+        seed_ids = [item["id"] for item in seeds if item.get("id")]
+        if not seed_ids:
+            return {"nodes": [], "edges": []}
+        placeholders = ",".join("?" for _ in seed_ids)
+        with self._connect() as conn:
+            relationships = conn.execute(
+                f"""
+                SELECT id, source_id, target_id, type, document_id, metadata_json
+                FROM relationships
+                WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})
+                LIMIT ?
+                """,
+                [*seed_ids, *seed_ids, limit],
+            ).fetchall()
+            entity_ids = set(seed_ids)
+            for rel in relationships:
+                entity_ids.add(rel["source_id"])
+                entity_ids.add(rel["target_id"])
+
+            entity_placeholders = ",".join("?" for _ in entity_ids)
+            entities = conn.execute(
+                f"""
+                SELECT id, kind, value, metadata_json
+                FROM entities
+                WHERE id IN ({entity_placeholders})
+                """,
+                list(entity_ids),
+            ).fetchall()
+
+        return {
+            "nodes": [
+                {
+                    "id": row["id"],
+                    "label": row["value"],
+                    "kind": row["kind"],
+                    "group": row["kind"],
+                    "metadata": json.loads(row["metadata_json"] or "{}"),
+                }
+                for row in entities
+            ],
+            "edges": [
+                {
+                    "id": row["id"],
+                    "source": row["source_id"],
+                    "target": row["target_id"],
+                    "label": row["type"],
+                    "type": row["type"],
+                    "metadata": json.loads(row["metadata_json"] or "{}"),
+                }
+                for row in relationships
+            ],
+        }
+
     def graph_for_document(self, document_id: str) -> dict[str, list[dict[str, Any]]]:
         """Return local graph rows for one document."""
         with self._connect() as conn:

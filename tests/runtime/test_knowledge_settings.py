@@ -68,3 +68,19 @@ def test_helix_connection_test_returns_unavailable_when_database_is_unreachable(
     assert result["state"] == "unavailable"
     assert result["baseUrl"] == "http://127.0.0.1:6969"
     assert "connection refused" in result["error"]
+
+
+def test_snapshot_hides_neo4j_settings_and_sqlite_test_reports_local_graph_index() -> None:
+    settings = RuntimeKnowledgeSettings(Config())
+
+    snapshot = settings.snapshot()
+    result = settings.test_connection(backend="sqlite")
+
+    assert "neo4j" not in snapshot
+    assert snapshot["local"]["state"] == "available"
+    assert result == {
+        "enabled": True,
+        "backend": "sqlite",
+        "state": "available",
+        "storeDir": "knowledge",
+    }

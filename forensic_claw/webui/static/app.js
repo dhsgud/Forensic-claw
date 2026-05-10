@@ -21,6 +21,8 @@ const state = {
   isApplyingKnowledge: false,
   caseProfile: null,
   attachments: [],
+  activeGraphView: null,
+  selectedGraphNodeId: "",
   dragDepth: 0,
 };
 
@@ -35,16 +37,10 @@ const setupProvider = document.querySelector("#setup-model-provider");
 const setupModelId = document.querySelector("#setup-model-id");
 const setupApiBase = document.querySelector("#setup-model-api-base");
 const setupKnowledgeBackend = document.querySelector("#setup-knowledge-backend");
-const setupNeo4jEnabled = document.querySelector("#setup-neo4j-enabled");
-const setupNeo4jUri = document.querySelector("#setup-neo4j-uri");
-const setupNeo4jUsername = document.querySelector("#setup-neo4j-username");
-const setupNeo4jPassword = document.querySelector("#setup-neo4j-password");
-const setupNeo4jDatabase = document.querySelector("#setup-neo4j-database");
 const setupHelixEnabled = document.querySelector("#setup-helix-enabled");
 const setupHelixPort = document.querySelector("#setup-helix-port");
 const setupHelixApiEndpoint = document.querySelector("#setup-helix-api-endpoint");
 const setupHelixFallback = document.querySelector("#setup-helix-fallback");
-const setupNeo4jFields = document.querySelectorAll(".setup-neo4j-field");
 const setupHelixFields = document.querySelectorAll(".setup-helix-field");
 const setupTestModel = document.querySelector("#setup-test-model");
 const setupTestDb = document.querySelector("#setup-test-db");
@@ -63,6 +59,12 @@ const slashMenu = document.querySelector("#slash-menu");
 const sessionsList = document.querySelector("#sessions-list");
 const casesList = document.querySelector("#cases-list");
 const chatLog = document.querySelector("#chat-log");
+const workspaceBody = document.querySelector(".workspace-body");
+const graphInspectorPanel = document.querySelector("#graph-inspector-panel");
+const graphClose = document.querySelector("#graph-close");
+const graphSummary = document.querySelector("#graph-summary");
+const graphCanvas = document.querySelector("#graph-canvas");
+const graphDetail = document.querySelector("#graph-detail");
 const composerShell = document.querySelector(".composer-shell");
 const composer = document.querySelector("#composer");
 const messageInput = document.querySelector("#message-input");
@@ -90,11 +92,6 @@ const helixEnabled = document.querySelector("#helix-enabled");
 const helixPort = document.querySelector("#helix-port");
 const helixApiEndpoint = document.querySelector("#helix-api-endpoint");
 const helixFallback = document.querySelector("#helix-fallback");
-const neo4jEnabled = document.querySelector("#neo4j-enabled");
-const neo4jUri = document.querySelector("#neo4j-uri");
-const neo4jUsername = document.querySelector("#neo4j-username");
-const neo4jPassword = document.querySelector("#neo4j-password");
-const neo4jDatabase = document.querySelector("#neo4j-database");
 const knowledgeTest = document.querySelector("#knowledge-test");
 const knowledgeSave = document.querySelector("#knowledge-save");
 const knowledgeSummary = document.querySelector("#knowledge-summary");
@@ -168,7 +165,7 @@ function setKnowledgeStatus(text, kind = "") {
 }
 
 function knowledgeBackendLabel(backend) {
-  return backend === "helix" ? "HelixDB" : "Neo4j";
+  return backend === "helix" ? "HelixDB" : "Local graph index";
 }
 
 function syncKnowledgeBackendUi() {
@@ -185,11 +182,6 @@ function syncKnowledgeBackendUi() {
   if (helixPort) helixPort.closest(".field")?.toggleAttribute("hidden", !usingHelix);
   if (helixApiEndpoint) helixApiEndpoint.closest(".field")?.toggleAttribute("hidden", !usingHelix);
   if (helixFallback) helixFallback.closest(".field")?.toggleAttribute("hidden", !usingHelix);
-  if (neo4jEnabled) neo4jEnabled.closest(".field")?.toggleAttribute("hidden", usingHelix);
-  if (neo4jUri) neo4jUri.closest(".field")?.toggleAttribute("hidden", usingHelix);
-  if (neo4jUsername) neo4jUsername.closest(".field")?.toggleAttribute("hidden", usingHelix);
-  if (neo4jPassword) neo4jPassword.closest(".field")?.toggleAttribute("hidden", usingHelix);
-  if (neo4jDatabase) neo4jDatabase.closest(".field")?.toggleAttribute("hidden", usingHelix);
 }
 
 function syncSetupKnowledgeBackendUi() {
@@ -202,7 +194,6 @@ function syncSetupKnowledgeBackendUi() {
     setupTestDb.textContent = `Test ${knowledgeBackendLabel(backend)}`;
     setupTestDb.setAttribute("aria-label", `Test ${knowledgeBackendLabel(backend)} connection`);
   }
-  setupNeo4jFields.forEach((field) => field.toggleAttribute("hidden", usingHelix));
   setupHelixFields.forEach((field) => field.toggleAttribute("hidden", !usingHelix));
 }
 
@@ -211,20 +202,12 @@ function knowledgePayloadFromFields(fields) {
     enabled: Boolean(fields.knowledgeEnabled?.checked),
     backend: fields.backend?.value || "sqlite",
     storeDir: fields.storeDir?.value.trim() || "knowledge",
-    neo4jEnabled: Boolean(fields.neo4jEnabled?.checked),
-    uri: fields.uri?.value.trim() || "",
-    username: fields.username?.value.trim() || "",
-    database: fields.database?.value.trim() || "neo4j",
     helixEnabled: Boolean(fields.helixEnabled?.checked),
     helixLocal: true,
     helixPort: Number(fields.helixPort?.value || 6969),
     helixApiEndpoint: fields.helixApiEndpoint?.value.trim() || "",
     helixFallbackToSqlite: fields.helixFallback?.checked ?? true,
   };
-  const password = fields.password?.value || "";
-  if (password) {
-    payload.password = password;
-  }
   return payload;
 }
 
@@ -237,11 +220,6 @@ function currentKnowledgeForm() {
     helixPort,
     helixApiEndpoint,
     helixFallback,
-    neo4jEnabled,
-    uri: neo4jUri,
-    username: neo4jUsername,
-    password: neo4jPassword,
-    database: neo4jDatabase,
   });
 }
 
@@ -254,26 +232,19 @@ function setupKnowledgeFormPayload() {
     helixPort: setupHelixPort,
     helixApiEndpoint: setupHelixApiEndpoint,
     helixFallback: setupHelixFallback,
-    neo4jEnabled: setupNeo4jEnabled,
-    uri: setupNeo4jUri,
-    username: setupNeo4jUsername,
-    password: setupNeo4jPassword,
-    database: setupNeo4jDatabase,
   });
 }
 
 function renderKnowledgeConfig(config) {
   state.knowledgeConfig = config || null;
-  if (!knowledgeEnabled || !knowledgeBackend || !knowledgeStoreDir || !neo4jEnabled || !neo4jUri || !knowledgeSummary) return;
+  if (!knowledgeEnabled || !knowledgeBackend || !knowledgeStoreDir || !knowledgeSummary) return;
   if (!config) {
     setKnowledgeStatus("offline", "warn");
     knowledgeSummary.textContent = "Knowledge settings are unavailable.";
     return;
   }
 
-  const neo4j = config.neo4j || {};
   const helix = config.helix || {};
-  const neo4jStatus = neo4j.status || {};
   const helixStatus = helix.status || {};
   knowledgeEnabled.checked = Boolean(config.enabled);
   knowledgeBackend.value = config.backend || "sqlite";
@@ -282,40 +253,23 @@ function renderKnowledgeConfig(config) {
   if (helixPort) helixPort.value = helix.port || 6969;
   if (helixApiEndpoint) helixApiEndpoint.value = helix.apiEndpoint || "";
   if (helixFallback) helixFallback.checked = helix.fallbackToSqlite ?? true;
-  neo4jEnabled.checked = Boolean(neo4j.enabled);
-  neo4jUri.value = neo4j.uri || "";
-  neo4jUsername.value = neo4j.username || "";
-  neo4jDatabase.value = neo4j.database || "neo4j";
-  if (neo4jPassword) {
-    neo4jPassword.value = "";
-    neo4jPassword.placeholder = neo4j.passwordConfigured ? "Saved password configured" : "";
-  }
 
   const usingHelix = (config.backend || "sqlite") === "helix";
   const stateText = usingHelix
     ? (helixStatus.state || (helix.enabled ? "configured" : "disabled"))
-    : neo4j.enabled ? (neo4jStatus.state || "not tested") : "disabled";
-  const badgeKind = stateText === "connected" ? "success" : stateText === "disabled" ? "" : "warn";
+    : "available";
+  const badgeKind = stateText === "connected" || stateText === "available" ? "success" : stateText === "disabled" ? "" : "warn";
   setKnowledgeStatus(stateText, badgeKind);
   knowledgeSummary.textContent = usingHelix
     ? `RAG ${config.enabled ? "enabled" : "disabled"} - HelixDB ${stateText} - port ${helix.port || 6969}`
-    : `RAG ${config.enabled ? "enabled" : "disabled"} - ${config.storeDir || "knowledge"} - Neo4j ${stateText}`;
+    : `RAG ${config.enabled ? "enabled" : "disabled"} - local graph index - ${config.storeDir || "knowledge"}`;
   syncKnowledgeBackendUi();
 }
 
 function renderSetupKnowledgeConfig(config) {
-  if (!setupKnowledgeBackend || !setupNeo4jEnabled || !setupNeo4jUri || !setupNeo4jUsername || !setupNeo4jDatabase) return;
-  const neo4j = config?.neo4j || {};
+  if (!setupKnowledgeBackend) return;
   const helix = config?.helix || {};
   setupKnowledgeBackend.value = config?.backend || "sqlite";
-  setupNeo4jEnabled.checked = Boolean(neo4j.enabled ?? true);
-  setupNeo4jUri.value = neo4j.uri || "bolt://127.0.0.1:7687";
-  setupNeo4jUsername.value = neo4j.username || "neo4j";
-  setupNeo4jDatabase.value = neo4j.database || "neo4j";
-  if (setupNeo4jPassword) {
-    setupNeo4jPassword.value = "";
-    setupNeo4jPassword.placeholder = neo4j.passwordConfigured ? "Saved password configured" : "";
-  }
   if (setupHelixEnabled) setupHelixEnabled.checked = Boolean(helix.enabled);
   if (setupHelixPort) setupHelixPort.value = helix.port || 6969;
   if (setupHelixApiEndpoint) setupHelixApiEndpoint.value = helix.apiEndpoint || "";
@@ -430,11 +384,6 @@ async function completeInitialSetup(event) {
     setupStatus.textContent = "케이스 이름, 수사관 이름, Local LLM 설정을 모두 입력하세요.";
     return;
   }
-  if (knowledgePayload.backend !== "helix" && knowledgePayload.neo4jEnabled && !knowledgePayload.uri) {
-    setupStatus.textContent = "Neo4j를 사용할 경우 URI를 입력하세요.";
-    return;
-  }
-
   setupStart.disabled = true;
   setupStatus.textContent = "설정을 저장하는 중입니다.";
   try {
@@ -746,11 +695,277 @@ function setEmpty(container, text) {
   container.innerHTML = `<div class="empty-state">${escapeHtml(text)}</div>`;
 }
 
+function normalizeGraphViews(rawViews) {
+  const items = Array.isArray(rawViews) ? rawViews : rawViews ? [rawViews] : [];
+  return items
+    .map((item, index) => normalizeGraphView(item, `Graph ${index + 1}`))
+    .filter((item) => item.nodes.length || item.edges.length);
+}
+
+function normalizeGraphView(raw, fallbackTitle = "Graph") {
+  const source = raw?.graphView || raw?.graph || raw || {};
+  const rawNodes = Array.isArray(source)
+    ? source
+    : Array.isArray(source.nodes)
+    ? source.nodes
+    : Array.isArray(source.entities)
+      ? source.entities
+      : Array.isArray(raw?.nodes)
+        ? raw.nodes
+        : Array.isArray(raw?.entities)
+          ? raw.entities
+          : [];
+  const rawEdges = Array.isArray(source.edges)
+    ? source.edges
+    : Array.isArray(source.relationships)
+      ? source.relationships
+      : Array.isArray(raw?.edges)
+        ? raw.edges
+        : Array.isArray(raw?.relationships)
+          ? raw.relationships
+          : [];
+
+  const nodes = [];
+  const nodeById = new Map();
+  for (const item of rawNodes) {
+    const metadata = item?.metadata && typeof item.metadata === "object" ? item.metadata : item || {};
+    const id = String(item?.id || item?.entity_id || item?.value || item?.label || "").trim();
+    if (!id || nodeById.has(id)) continue;
+    const node = {
+      id,
+      label: String(item?.label || item?.value || item?.path || id),
+      kind: String(item?.kind || item?.group || item?.type || "Node"),
+      degree: Number(item?.degree || metadata.degree || 0),
+      metadata,
+    };
+    nodeById.set(id, node);
+    nodes.push(node);
+  }
+
+  const edges = [];
+  const seenEdges = new Set();
+  for (const item of rawEdges) {
+    const sourceId = String(item?.source || item?.source_id || item?.from || "").trim();
+    const targetId = String(item?.target || item?.target_id || item?.to || "").trim();
+    if (!sourceId || !targetId) continue;
+    const label = String(item?.label || item?.type || item?.rel_type || "RELATED");
+    const id = String(item?.id || item?.relationship_id || `${sourceId}:${label}:${targetId}`);
+    if (seenEdges.has(id)) continue;
+    seenEdges.add(id);
+    edges.push({
+      id,
+      source: sourceId,
+      target: targetId,
+      label,
+      metadata: item?.metadata && typeof item.metadata === "object" ? item.metadata : item || {},
+    });
+    for (const nodeId of [sourceId, targetId]) {
+      if (!nodeById.has(nodeId)) {
+        const node = { id: nodeId, label: nodeId, kind: "Node", degree: 0, metadata: {} };
+        nodeById.set(nodeId, node);
+        nodes.push(node);
+      }
+    }
+  }
+
+  return {
+    title: String(raw?.title || raw?.query || fallbackTitle),
+    query: String(raw?.query || ""),
+    source: String(raw?.source || "knowledge_search"),
+    nodes,
+    edges,
+  };
+}
+
+function extractGraphViewsFromText(text) {
+  const source = String(text || "");
+  const matches = [...source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((match) => match[1]);
+  if (source.trim().startsWith("{")) {
+    matches.push(source);
+  }
+  const views = [];
+  for (const block of matches) {
+    try {
+      const parsed = JSON.parse(block);
+      const view = normalizeGraphView(parsed);
+      if (view.nodes.length || view.edges.length) {
+        views.push(view);
+      }
+    } catch (_error) {
+      // Ignore non-graph JSON snippets in normal assistant prose.
+    }
+  }
+  return views;
+}
+
+function messageGraphViews(text, suppliedViews = []) {
+  const views = [...normalizeGraphViews(suppliedViews), ...extractGraphViewsFromText(text)];
+  const seen = new Set();
+  return views.filter((view) => {
+    const key = `${view.title}:${view.nodes.map((node) => node.id).sort().join(",")}:${view.edges.length}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function attachGraphActions(node, graphViews) {
+  node.querySelector(".graph-actions")?.remove();
+  if (!graphViews.length || roleForNode(node) !== "assistant") return;
+  node._graphViews = graphViews;
+  const actions = document.createElement("div");
+  actions.className = "graph-actions";
+  for (const [index, view] of graphViews.entries()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost-button graph-open-button";
+    button.textContent = index === 0 ? "그래프로 확인하기" : `그래프 ${index + 1}`;
+    button.title = `${view.nodes.length} nodes, ${view.edges.length} edges`;
+    button.addEventListener("click", () => openGraphPanel(view));
+    actions.appendChild(button);
+  }
+  const thinking = node.querySelector(".message-thinking");
+  if (thinking) {
+    node.insertBefore(actions, thinking);
+  } else {
+    node.appendChild(actions);
+  }
+}
+
+function openGraphPanel(view) {
+  if (!graphInspectorPanel || !graphCanvas || !graphDetail) return;
+  state.activeGraphView = view;
+  state.selectedGraphNodeId = view.nodes[0]?.id || "";
+  workspaceBody?.classList.remove("no-inspector");
+  graphInspectorPanel.hidden = false;
+  renderGraphPanel();
+}
+
+function closeGraphPanel() {
+  state.activeGraphView = null;
+  state.selectedGraphNodeId = "";
+  if (graphInspectorPanel) graphInspectorPanel.hidden = true;
+  if (graphCanvas) graphCanvas.innerHTML = "";
+  if (graphDetail) graphDetail.innerHTML = "";
+  workspaceBody?.classList.add("no-inspector");
+}
+
+function renderGraphPanel() {
+  const view = state.activeGraphView;
+  if (!view || !graphCanvas || !graphSummary || !graphDetail) return;
+  graphSummary.textContent = `${view.title} - ${view.nodes.length} nodes / ${view.edges.length} edges`;
+  renderGraphCanvas(view);
+  const selected = view.nodes.find((node) => node.id === state.selectedGraphNodeId) || view.nodes[0] || null;
+  renderGraphDetail(view, selected);
+}
+
+function graphNodeColor(kind) {
+  const palette = {
+    IP: "#2563eb",
+    DOMAIN: "#0f766e",
+    URL: "#7c3aed",
+    FILE: "#a16207",
+    EXECUTABLE: "#b42318",
+    REGISTRY: "#475569",
+    SOURCE: "#0f172a",
+  };
+  return palette[String(kind || "").toUpperCase()] || "#3b82f6";
+}
+
+function graphLayout(nodes) {
+  const width = 680;
+  const height = 420;
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) * 0.36;
+  return nodes.map((node, index) => {
+    const angle = nodes.length <= 1 ? 0 : (Math.PI * 2 * index) / nodes.length - Math.PI / 2;
+    return {
+      ...node,
+      x: nodes.length <= 1 ? cx : cx + Math.cos(angle) * radius,
+      y: nodes.length <= 1 ? cy : cy + Math.sin(angle) * radius,
+    };
+  });
+}
+
+function renderGraphCanvas(view) {
+  const positioned = graphLayout(view.nodes);
+  const byId = new Map(positioned.map((node) => [node.id, node]));
+  const edges = view.edges
+    .map((edge) => ({ ...edge, sourceNode: byId.get(edge.source), targetNode: byId.get(edge.target) }))
+    .filter((edge) => edge.sourceNode && edge.targetNode);
+  const nodeMarkup = positioned.map((node) => {
+    const selected = node.id === state.selectedGraphNodeId;
+    const color = graphNodeColor(node.kind);
+    const label = node.label.length > 22 ? `${node.label.slice(0, 19)}...` : node.label;
+    return `
+      <g class="graph-node${selected ? " selected" : ""}" data-node-id="${escapeAttribute(node.id)}" tabindex="0" role="button">
+        <circle cx="${node.x.toFixed(1)}" cy="${node.y.toFixed(1)}" r="${selected ? 18 : 15}" fill="${color}"></circle>
+        <text x="${node.x.toFixed(1)}" y="${(node.y + 31).toFixed(1)}" text-anchor="middle">${escapeHtml(label)}</text>
+        <title>${escapeHtml(`${node.kind}: ${node.label}`)}</title>
+      </g>
+    `;
+  }).join("");
+  const edgeMarkup = edges.map((edge) => {
+    const midX = (edge.sourceNode.x + edge.targetNode.x) / 2;
+    const midY = (edge.sourceNode.y + edge.targetNode.y) / 2;
+    return `
+      <g class="graph-edge">
+        <line x1="${edge.sourceNode.x.toFixed(1)}" y1="${edge.sourceNode.y.toFixed(1)}" x2="${edge.targetNode.x.toFixed(1)}" y2="${edge.targetNode.y.toFixed(1)}"></line>
+        <text x="${midX.toFixed(1)}" y="${(midY - 5).toFixed(1)}" text-anchor="middle">${escapeHtml(edge.label)}</text>
+      </g>
+    `;
+  }).join("");
+
+  graphCanvas.innerHTML = `
+    <svg class="graph-svg" viewBox="0 0 680 420" role="img" aria-label="Evidence relationship graph">
+      <rect x="0" y="0" width="680" height="420" rx="8"></rect>
+      ${edgeMarkup}
+      ${nodeMarkup}
+    </svg>
+  `;
+  graphCanvas.querySelectorAll(".graph-node").forEach((element) => {
+    const activate = () => {
+      state.selectedGraphNodeId = element.getAttribute("data-node-id") || "";
+      renderGraphPanel();
+    };
+    element.addEventListener("click", activate);
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        activate();
+      }
+    });
+  });
+}
+
+function renderGraphDetail(view, node) {
+  if (!graphDetail) return;
+  if (!node) {
+    setEmpty(graphDetail, "선택된 노드가 없습니다.");
+    return;
+  }
+  const relatedEdges = view.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+  const metadata = Object.entries(node.metadata || {})
+    .filter(([, value]) => value !== null && value !== undefined && String(value) !== "")
+    .slice(0, 10);
+  graphDetail.innerHTML = `
+    <div class="detail-card graph-node-detail">
+      <h3>${escapeHtml(node.label)}</h3>
+      <p class="detail-meta">${escapeHtml(node.kind)} · ${relatedEdges.length} relationships</p>
+      <div class="token-row">
+        ${relatedEdges.map((edge) => `<span class="file-chip">${escapeHtml(edge.label)}</span>`).join("") || '<span class="file-chip">No direct edge</span>'}
+      </div>
+      <pre class="detail-block">${escapeHtml(metadata.map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : value}`).join("\n") || "No metadata")}</pre>
+    </div>
+  `;
+}
+
 function setMessageMeta(node, text) {
   node.querySelector(".message-meta").textContent = text;
 }
 
-function setMessageContent(node, text) {
+function setMessageContent(node, text, options = {}) {
   const contentNode = contentNodeFor(node);
   if (!contentNode) return;
   const role = roleForNode(node);
@@ -761,12 +976,14 @@ function setMessageContent(node, text) {
     contentNode.innerHTML = renderMarkdown(rawText);
     contentNode.classList.remove("message-plain");
     contentNode.classList.add("message-markdown", "markdown-rendered");
+    attachGraphActions(node, messageGraphViews(rawText, options.graphViews || node._graphViews || []));
     return;
   }
 
   contentNode.innerHTML = renderPlainText(rawText);
   contentNode.classList.remove("message-markdown", "markdown-rendered");
   contentNode.classList.add("message-plain");
+  attachGraphActions(node, []);
 }
 
 function messageContentText(node) {
@@ -978,7 +1195,7 @@ function makeMessage(role, content, metaText = "", extraClass = "", options = {}
     }
     decorateToolMessage(node, content);
   } else {
-    setMessageContent(node, content);
+    setMessageContent(node, content, { graphViews: options.graphViews || [] });
   }
 
   chatLog.appendChild(node);
@@ -1670,7 +1887,7 @@ function handleSocketEvent(event) {
       node = makeMessage(event.role || "assistant", "", event.role || "assistant");
     }
     setMessageMeta(node, event.role || "assistant");
-    setMessageContent(node, event.content || "");
+    setMessageContent(node, event.content || "", { graphViews: event.graphViews || [] });
     finalizeAssistantNode(node);
     if (event.thinkingText) {
       setThinkingText(node, event.thinkingText);
@@ -1824,7 +2041,7 @@ async function loadSession(session) {
       message.content || "",
       message.role || "message",
       "",
-      { thinkingText: message.thinkingText || "" }
+      { thinkingText: message.thinkingText || "", graphViews: message.graphViews || [] }
     );
   }
 
@@ -1977,6 +2194,8 @@ knowledgeSave?.addEventListener("click", () => {
     knowledgeSummary.textContent = error.message || "Could not apply knowledge settings.";
   });
 });
+
+graphClose?.addEventListener("click", closeGraphPanel);
 
 setupProvider?.addEventListener("change", syncSetupDefaultApiBaseFromProvider);
 setupKnowledgeBackend?.addEventListener("change", syncSetupKnowledgeBackendUi);

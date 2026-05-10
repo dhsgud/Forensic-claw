@@ -9,7 +9,7 @@ from forensic_claw.uploads import UploadService, build_attachment_context, class
 
 
 def _config() -> KnowledgeConfig:
-    return KnowledgeConfig(neo4j={"enabled": False}, chunk_chars=1000, chunk_overlap_chars=0)
+    return KnowledgeConfig(chunk_chars=1000, chunk_overlap_chars=0)
 
 
 def test_save_bytes_indexes_text_upload_when_knowledge_service_is_available(tmp_path):

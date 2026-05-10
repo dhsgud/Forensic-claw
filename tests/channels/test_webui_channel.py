@@ -86,16 +86,9 @@ class FakeKnowledgeSettings:
             "chunkOverlapChars": 400,
             "maxFileBytes": 268435456,
             "maxChromeRows": 10000,
-            "neo4j": {
-                "enabled": True,
-                "uri": "bolt://127.0.0.1:7687",
-                "username": "neo4j",
-                "database": "neo4j",
-                "passwordConfigured": False,
-                "status": {"enabled": True, "state": "unavailable"},
-            },
+            "local": {"enabled": True, "state": "available", "status": {}},
             "helix": {
-                "enabled": False,
+                "enabled": None,
                 "local": True,
                 "port": 6969,
                 "apiEndpoint": "",
@@ -127,18 +120,6 @@ class FakeKnowledgeSettings:
         if kwargs.get("helix_fallback_to_sqlite") is not None:
             helix["fallbackToSqlite"] = kwargs["helix_fallback_to_sqlite"]
         helix["status"] = {"enabled": helix["enabled"], "state": "configured"}
-        neo4j = self._snapshot["neo4j"]
-        if kwargs.get("neo4j_enabled") is not None:
-            neo4j["enabled"] = kwargs["neo4j_enabled"]
-        if kwargs.get("uri") is not None:
-            neo4j["uri"] = kwargs["uri"]
-        if kwargs.get("username") is not None:
-            neo4j["username"] = kwargs["username"]
-        if kwargs.get("database") is not None:
-            neo4j["database"] = kwargs["database"]
-        if kwargs.get("password_supplied"):
-            neo4j["passwordConfigured"] = bool(kwargs.get("password"))
-        neo4j["status"] = {"enabled": neo4j["enabled"], "state": "connected", "uri": neo4j["uri"]}
         return self.snapshot()
 
     def test_connection(self, **kwargs) -> dict:
@@ -151,8 +132,9 @@ class FakeKnowledgeSettings:
             }
         return {
             "enabled": kwargs.get("enabled"),
-            "state": "connected",
-            "uri": kwargs.get("uri") or self._snapshot["neo4j"]["uri"],
+            "backend": "sqlite",
+            "state": "available",
+            "storeDir": self._snapshot["storeDir"],
         }
 
 
@@ -200,7 +182,7 @@ def _write_case_fixture(workspace: Path) -> None:
 
 
 def _knowledge_config() -> KnowledgeConfig:
-    return KnowledgeConfig(neo4j={"enabled": False}, chunk_chars=1000, chunk_overlap_chars=0)
+    return KnowledgeConfig(chunk_chars=1000, chunk_overlap_chars=0)
 
 
 @pytest.mark.asyncio
@@ -288,36 +270,27 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
         response = await client.get("/api/knowledge-config")
         assert response.status == 200
         payload = await response.json()
-        assert payload["knowledgeConfig"]["neo4j"]["uri"] == "bolt://127.0.0.1:7687"
+        assert payload["knowledgeConfig"]["local"]["state"] == "available"
+        assert "neo4j" not in payload["knowledgeConfig"]
 
         response = await client.patch(
             "/api/knowledge-config",
             json={
                 "enabled": True,
                 "storeDir": "knowledge-live",
-                "neo4jEnabled": True,
-                "uri": "bolt://127.0.0.1:7688",
-                "username": "neo4j",
-                "password": "secret",
-                "database": "forensic",
+                "backend": "sqlite",
             },
         )
         assert response.status == 200
         payload = await response.json()
         assert payload["ok"] is True
         assert payload["knowledgeConfig"]["storeDir"] == "knowledge-live"
-        assert payload["knowledgeConfig"]["neo4j"]["passwordConfigured"] is True
+        assert "neo4j" not in payload["knowledgeConfig"]
         assert knowledge_settings.applied == [
             {
                 "enabled": True,
-                "backend": None,
+                "backend": "sqlite",
                 "store_dir": "knowledge-live",
-                "neo4j_enabled": True,
-                "uri": "bolt://127.0.0.1:7688",
-                "username": "neo4j",
-                "password": "secret",
-                "password_supplied": True,
-                "database": "forensic",
                 "helix_enabled": None,
                 "helix_local": None,
                 "helix_port": None,
@@ -328,21 +301,16 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
 
         response = await client.post(
             "/api/knowledge-config/test",
-            json={"neo4jEnabled": True, "uri": "bolt://127.0.0.1:7688"},
+            json={"backend": "sqlite"},
         )
         assert response.status == 200
         payload = await response.json()
         assert payload["ok"] is True
-        assert payload["result"]["state"] == "connected"
+        assert payload["result"]["state"] == "available"
         assert knowledge_settings.tested == [
             {
-                "enabled": True,
-                "backend": None,
-                "uri": "bolt://127.0.0.1:7688",
-                "username": None,
-                "password": None,
-                "password_supplied": False,
-                "database": None,
+                "enabled": None,
+                "backend": "sqlite",
                 "helix_enabled": None,
                 "helix_local": None,
                 "helix_port": None,
@@ -740,6 +708,42 @@ async def test_webui_message_can_request_browser_session_reset(tmp_path: Path) -
         message = await ws.receive_json()
         assert message["type"] == "message"
         assert message["resetBrowserSession"] is True
+
+        await ws.close()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_message_can_include_graph_views(tmp_path: Path) -> None:
+    channel, _bus, _session_manager, client = await _make_client(tmp_path)
+
+    try:
+        session_id = (await (await client.get("/api/bootstrap")).json())["sessionId"]
+        ws = await client.ws_connect(f"/ws?sessionId={session_id}")
+        await ws.receive_json()
+
+        await channel.send(
+            OutboundMessage(
+                channel="webui",
+                chat_id=session_id,
+                content="DB 관계를 확인했습니다.",
+                metadata={
+                    "graph_views": [
+                        {
+                            "title": "Evidence Relationship Graph",
+                            "query": "10.0.0.5",
+                            "nodes": [{"id": "ip:10.0.0.5", "label": "10.0.0.5", "kind": "IP"}],
+                            "edges": [],
+                        }
+                    ]
+                },
+            )
+        )
+        message = await ws.receive_json()
+
+        assert message["type"] == "message"
+        assert message["graphViews"][0]["nodes"][0]["id"] == "ip:10.0.0.5"
 
         await ws.close()
     finally:

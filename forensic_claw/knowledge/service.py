@@ -21,7 +21,6 @@ import chardet
 from loguru import logger
 
 from forensic_claw.knowledge.helix_backend import HelixKnowledgeBackend
-from forensic_claw.knowledge.neo4j_sink import Neo4jSink
 from forensic_claw.knowledge.store import DocumentRecord, KnowledgeStore
 
 _DEFAULT_PATTERNS = (
@@ -74,19 +73,17 @@ class KnowledgeIngestResult:
     entities: int = 0
     relationships: int = 0
     errors: list[str] = field(default_factory=list)
-    neo4j: dict[str, Any] = field(default_factory=dict)
     helix: dict[str, Any] = field(default_factory=dict)
 
 
 class KnowledgeService:
-    """Ingest local artifacts into a SQLite RAG index and Neo4j graph."""
+    """Ingest local artifacts into a RAG index and graph store."""
 
     def __init__(self, workspace: Path, config: Any):
         self.workspace = workspace
         self.config = config
         self.enabled = bool(getattr(config, "enabled", True))
         self.store = KnowledgeStore(workspace, getattr(config, "store_dir", "knowledge"))
-        self.neo4j = Neo4jSink(getattr(config, "neo4j", None))
         self.helix = HelixKnowledgeBackend(getattr(config, "helix", None))
         logger.debug(
             "KnowledgeService initialized: workspace={} enabled={} backend={} helixEnabled={}",
@@ -97,12 +94,11 @@ class KnowledgeService:
         )
 
     def status(self) -> dict[str, Any]:
-        """Return local RAG and Neo4j readiness."""
+        """Return local RAG and graph backend readiness."""
         return {
             "enabled": self.enabled,
             "backend": self._backend_name,
             "store": self.store.stats(),
-            "neo4j": self.neo4j.status(),
             "helix": self.helix.status(),
         }
 
@@ -111,14 +107,12 @@ class KnowledgeService:
         self.config = config
         self.enabled = bool(getattr(config, "enabled", True))
         self.store = KnowledgeStore(self.workspace, getattr(config, "store_dir", "knowledge"))
-        self.neo4j = Neo4jSink(getattr(config, "neo4j", None))
         self.helix.reconfigure(getattr(config, "helix", None))
         logger.info(
-            "KnowledgeService reconfigured: enabled={} backend={} helixEnabled={} neo4jEnabled={}",
+            "KnowledgeService reconfigured: enabled={} backend={} helixEnabled={}",
             self.enabled,
             self._backend_name,
             self.helix.enabled,
-            self.neo4j.enabled,
         )
 
     @property
@@ -138,7 +132,6 @@ class KnowledgeService:
         max_files: int | None = None,
         case_name: str | None = None,
         investigator_name: str | None = None,
-        sync_neo4j: bool = True,
     ) -> KnowledgeIngestResult:
         """Ingest a file or directory."""
         if not self.enabled:
@@ -147,7 +140,6 @@ class KnowledgeService:
                 ok=False,
                 ready=False,
                 errors=["Knowledge RAG is disabled in config."],
-                neo4j=self.neo4j.status(),
                 helix=self.helix.status(),
             )
 
@@ -161,12 +153,10 @@ class KnowledgeService:
                 ok=False,
                 ready=False,
                 errors=[f"Path not found: {target}"],
-                neo4j=self.neo4j.status(),
                 helix=self.helix.status(),
             )
 
         result = KnowledgeIngestResult(ok=True, ready=False)
-        neo4j_totals = {"enabled": self.neo4j.enabled, "state": "not_synced", "entities": 0, "relationships": 0}
         helix_totals = {"enabled": self.helix.enabled, "state": "not_synced", "sources": 0, "chunks": 0, "entities": 0, "relationships": 0}
         logger.info(
             "Knowledge ingest started: target={} recursive={} backend={} maxFiles={}",
@@ -183,7 +173,6 @@ class KnowledgeService:
                     file_path,
                     case_name=case_name,
                     investigator_name=investigator_name,
-                    sync_neo4j=sync_neo4j,
                 )
                 if one is None:
                     result.skipped_files += 1
@@ -194,19 +183,13 @@ class KnowledgeService:
                 result.entities += int(one.get("entities", 0))
                 result.relationships += int(one.get("relationships", 0))
                 logger.debug(
-                    "Knowledge file ingested: path={} chunks={} entities={} relationships={} helixState={} neo4jState={}",
+                    "Knowledge file ingested: path={} chunks={} entities={} relationships={} helixState={}",
                     file_path,
                     one.get("chunks", 0),
                     one.get("entities", 0),
                     one.get("relationships", 0),
                     (one.get("helix") or {}).get("state"),
-                    (one.get("neo4j") or {}).get("state"),
                 )
-                neo4j = one.get("neo4j") or {}
-                if neo4j:
-                    neo4j_totals["state"] = neo4j.get("state", neo4j_totals["state"])
-                    neo4j_totals["entities"] += int(neo4j.get("entities", 0) or 0)
-                    neo4j_totals["relationships"] += int(neo4j.get("relationships", 0) or 0)
                 helix = one.get("helix") or {}
                 if helix:
                     helix_totals["state"] = helix.get("state", helix_totals["state"])
@@ -223,7 +206,6 @@ class KnowledgeService:
         if not result.scanned_files:
             result.errors.append(f"No ingestible files found under: {target}")
         result.ready = result.ok and result.ingested_files > 0
-        result.neo4j = neo4j_totals if sync_neo4j else {"enabled": self.neo4j.enabled, "state": "skipped"}
         result.helix = helix_totals if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
         logger.info(
             "Knowledge ingest finished: target={} ready={} scanned={} ingested={} skipped={} chunks={} entities={} relationships={} errors={}",
@@ -265,10 +247,13 @@ class KnowledgeService:
 
         hits = self.store.search(query, limit=limit)
         graph = self.store.graph_search(query, limit=limit) if include_graph else []
+        graph_view = self.store.graph_view(query, limit=max(limit * 6, 24)) if include_graph else {"nodes": [], "edges": []}
         logger.debug(
-            "Knowledge search completed through SQLite: hits={} graphItems={}",
+            "Knowledge search completed through SQLite: hits={} graphItems={} graphNodes={} graphEdges={}",
             len(hits),
             len(graph),
+            len(graph_view.get("nodes", [])),
+            len(graph_view.get("edges", [])),
         )
         return {
             "query": query,
@@ -284,6 +269,7 @@ class KnowledgeService:
                 for hit in hits
             ],
             "graph": graph,
+            "graphView": graph_view,
         }
 
     def discover_chrome_history(self, *, max_files: int = 20) -> list[Path]:
@@ -310,7 +296,6 @@ class KnowledgeService:
         case_name: str | None = None,
         investigator_name: str | None = None,
         max_files: int = 20,
-        sync_neo4j: bool = True,
     ) -> KnowledgeIngestResult:
         """Discover Chrome History databases and ingest them."""
         paths = self.discover_chrome_history(max_files=max_files)
@@ -320,11 +305,9 @@ class KnowledgeService:
                 ok=False,
                 ready=False,
                 errors=["No Chrome History database found in local Chrome profile paths or workspace."],
-                neo4j=self.neo4j.status(),
             )
 
         result = KnowledgeIngestResult(ok=True, ready=False)
-        neo4j_totals = {"enabled": self.neo4j.enabled, "state": "not_synced", "entities": 0, "relationships": 0}
         helix_totals = {"enabled": self.helix.enabled, "state": "not_synced", "sources": 0, "chunks": 0, "entities": 0, "relationships": 0}
         logger.info("Chrome History preparation started: files={}", len(paths))
         for path in paths:
@@ -333,7 +316,6 @@ class KnowledgeService:
                 recursive=False,
                 case_name=case_name,
                 investigator_name=investigator_name,
-                sync_neo4j=sync_neo4j,
             )
             result.scanned_files += one.scanned_files
             result.ingested_files += one.ingested_files
@@ -342,10 +324,6 @@ class KnowledgeService:
             result.entities += one.entities
             result.relationships += one.relationships
             result.errors.extend(one.errors)
-            if one.neo4j:
-                neo4j_totals["state"] = one.neo4j.get("state", neo4j_totals["state"])
-                neo4j_totals["entities"] += int(one.neo4j.get("entities", 0) or 0)
-                neo4j_totals["relationships"] += int(one.neo4j.get("relationships", 0) or 0)
             if one.helix:
                 helix_totals["state"] = one.helix.get("state", helix_totals["state"])
                 helix_totals["sources"] += int(one.helix.get("sources", 0) or 0)
@@ -357,7 +335,6 @@ class KnowledgeService:
 
         result.ready = result.ingested_files > 0
         result.ok = result.ready
-        result.neo4j = neo4j_totals if sync_neo4j else {"enabled": self.neo4j.enabled, "state": "skipped"}
         result.helix = helix_totals if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
         logger.info(
             "Chrome History preparation finished: ready={} scanned={} ingested={} errors={}",
@@ -430,7 +407,6 @@ class KnowledgeService:
         *,
         case_name: str | None,
         investigator_name: str | None,
-        sync_neo4j: bool,
     ) -> dict[str, Any] | None:
         size = path.stat().st_size
         max_size = int(getattr(self.config, "max_file_bytes", 256 * 1024 * 1024))
@@ -445,7 +421,6 @@ class KnowledgeService:
                 path,
                 case_name=case_name,
                 investigator_name=investigator_name,
-                sync_neo4j=sync_neo4j,
             )
 
         text_chunks = list(self._text_chunks(path))
@@ -477,11 +452,6 @@ class KnowledgeService:
         )
         graph = self.store.graph_for_document(document.id)
         helix = self._sync_helix(document, graph) if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
-        neo4j = (
-            {"enabled": self.neo4j.enabled, "state": "skipped"}
-            if self._use_helix
-            else self.neo4j.sync(graph) if sync_neo4j else {"enabled": self.neo4j.enabled, "state": "skipped"}
-        )
         logger.debug(
             "Text file indexed locally: documentId={} chunks={} entities={} relationships={}",
             document.id,
@@ -493,7 +463,6 @@ class KnowledgeService:
             "chunks": chunk_count,
             "entities": graph_counts["entities"],
             "relationships": graph_counts["relationships"],
-            "neo4j": neo4j,
             "helix": helix,
         }
 
@@ -577,7 +546,6 @@ class KnowledgeService:
         *,
         case_name: str | None,
         investigator_name: str | None,
-        sync_neo4j: bool,
     ) -> dict[str, Any]:
         max_rows = int(getattr(self.config, "max_chrome_rows", 10000))
         logger.info("Chrome History ingest started: path={} maxRows={}", path, max_rows)
@@ -656,11 +624,6 @@ class KnowledgeService:
         )
         graph = self.store.graph_for_document(document.id)
         helix = self._sync_helix(document, graph) if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
-        neo4j = (
-            {"enabled": self.neo4j.enabled, "state": "skipped"}
-            if self._use_helix
-            else self.neo4j.sync(graph) if sync_neo4j else {"enabled": self.neo4j.enabled, "state": "skipped"}
-        )
         logger.info(
             "Chrome History ingest finished: documentId={} rows={} chunks={} entities={} relationships={}",
             document.id,
@@ -673,7 +636,6 @@ class KnowledgeService:
             "chunks": chunk_count,
             "entities": graph_counts["entities"],
             "relationships": graph_counts["relationships"],
-            "neo4j": neo4j,
             "helix": helix,
         }
 
@@ -853,7 +815,6 @@ class KnowledgeService:
             f"- chunks: {result.chunks}",
             f"- graphEntities: {result.entities}",
             f"- graphRelationships: {result.relationships}",
-            f"- neo4j: {json.dumps(result.neo4j, ensure_ascii=False)}",
         ]
         if result.helix:
             lines.append(f"- helix: {json.dumps(result.helix, ensure_ascii=False)}")

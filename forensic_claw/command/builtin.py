@@ -41,7 +41,7 @@ _BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec("/status", "Show bot status", kind="priority"),
     BuiltinCommandSpec("/hash", "Calculate MD5, SHA256, and SHA512 for a local file"),
     BuiltinCommandSpec("/model", "Show or change the local model endpoint"),
-    BuiltinCommandSpec("/knowledge", "Show or prepare the local RAG and Neo4j evidence store"),
+    BuiltinCommandSpec("/knowledge", "Show or prepare the local RAG and graph evidence store"),
     BuiltinCommandSpec("/help", "Show available commands"),
 )
 

@@ -43,7 +43,6 @@ def _helix_config() -> KnowledgeConfig:
     return KnowledgeConfig(
         backend="helix",
         helix={"enabled": True},
-        neo4j={"enabled": False},
         chunk_chars=1000,
         chunk_overlap_chars=0,
     )

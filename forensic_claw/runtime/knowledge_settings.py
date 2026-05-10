@@ -1,4 +1,4 @@
-"""Runtime knowledge, HelixDB, and Neo4j settings support."""
+"""Runtime knowledge and HelixDB settings support."""
 
 from __future__ import annotations
 
@@ -8,12 +8,11 @@ from typing import Any
 from forensic_claw.config.loader import save_config
 from forensic_claw.config.schema import Config
 from forensic_claw.knowledge.helix_backend import HelixKnowledgeBackend
-from forensic_claw.knowledge.neo4j_sink import Neo4jSink
 from forensic_claw.knowledge.service import KnowledgeService
 
 
 class RuntimeKnowledgeSettings:
-    """Own knowledge/Neo4j config updates for a running process."""
+    """Own knowledge graph config updates for a running process."""
 
     def __init__(
         self,
@@ -28,10 +27,9 @@ class RuntimeKnowledgeSettings:
 
     def snapshot(self) -> dict[str, Any]:
         knowledge = self.config.knowledge
-        neo4j = knowledge.neo4j
         helix = knowledge.helix
         status = self.service.status() if self.service else {
-            "neo4j": Neo4jSink(neo4j).status(),
+            "store": {},
             "helix": HelixKnowledgeBackend(helix).status(),
         }
         return {
@@ -42,13 +40,10 @@ class RuntimeKnowledgeSettings:
             "chunkOverlapChars": knowledge.chunk_overlap_chars,
             "maxFileBytes": knowledge.max_file_bytes,
             "maxChromeRows": knowledge.max_chrome_rows,
-            "neo4j": {
-                "enabled": neo4j.enabled,
-                "uri": neo4j.uri,
-                "username": neo4j.username,
-                "database": neo4j.database,
-                "passwordConfigured": bool(neo4j.password),
-                "status": status.get("neo4j", status),
+            "local": {
+                "enabled": knowledge.enabled,
+                "state": "available",
+                "status": status.get("store", {}),
             },
             "helix": {
                 "enabled": helix.enabled,
@@ -66,22 +61,15 @@ class RuntimeKnowledgeSettings:
         enabled: bool | None = None,
         backend: str | None = None,
         store_dir: str | None = None,
-        neo4j_enabled: bool | None = None,
-        uri: str | None = None,
-        username: str | None = None,
-        password: str | None = None,
-        password_supplied: bool = False,
-        database: str | None = None,
         helix_enabled: bool | None = None,
         helix_local: bool | None = None,
         helix_port: int | None = None,
         helix_api_endpoint: str | None = None,
         helix_fallback_to_sqlite: bool | None = None,
     ) -> dict[str, Any]:
-        """Persist knowledge and Neo4j settings."""
+        """Persist knowledge and graph backend settings."""
         updated = self.config.model_copy(deep=True)
         knowledge = updated.knowledge
-        neo4j = knowledge.neo4j
         helix = knowledge.helix
 
         if enabled is not None:
@@ -96,19 +84,6 @@ class RuntimeKnowledgeSettings:
             if not normalized:
                 raise ValueError("Knowledge store directory must not be empty.")
             knowledge.store_dir = normalized
-        if neo4j_enabled is not None:
-            neo4j.enabled = neo4j_enabled
-        if uri is not None:
-            normalized_uri = uri.strip()
-            if not normalized_uri:
-                raise ValueError("Neo4j URI must not be empty.")
-            neo4j.uri = normalized_uri
-        if username is not None:
-            neo4j.username = username.strip()
-        if password_supplied:
-            neo4j.password = password or ""
-        if database is not None:
-            neo4j.database = database.strip() or "neo4j"
         if helix_enabled is not None:
             helix.enabled = helix_enabled
         if helix_local is not None:
@@ -130,11 +105,6 @@ class RuntimeKnowledgeSettings:
         self,
         *,
         enabled: bool | None = None,
-        uri: str | None = None,
-        username: str | None = None,
-        password: str | None = None,
-        password_supplied: bool = False,
-        database: str | None = None,
         backend: str | None = None,
         helix_enabled: bool | None = None,
         helix_local: bool | None = None,
@@ -155,18 +125,12 @@ class RuntimeKnowledgeSettings:
                 helix.api_endpoint = helix_api_endpoint.strip()
             return HelixKnowledgeBackend(helix).status()
 
-        neo4j = self.config.knowledge.neo4j.model_copy(deep=True)
-        if enabled is not None:
-            neo4j.enabled = enabled
-        if uri is not None and uri.strip():
-            neo4j.uri = uri.strip()
-        if username is not None:
-            neo4j.username = username.strip()
-        if password_supplied:
-            neo4j.password = password or ""
-        if database is not None:
-            neo4j.database = database.strip() or "neo4j"
-        return Neo4jSink(neo4j).status()
+        return {
+            "enabled": self.config.knowledge.enabled if enabled is None else bool(enabled),
+            "backend": "sqlite",
+            "state": "available",
+            "storeDir": self.config.knowledge.store_dir,
+        }
 
 
 def build_default_knowledge_settings(

@@ -182,6 +182,10 @@ button {
   display: none;
 }
 
+.workspace-body:not(.no-inspector) {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+}
+
 .panel {
   padding: 14px;
   border: 1px solid var(--line);
@@ -344,6 +348,13 @@ select:focus {
   background: #ffffff;
   color: var(--muted-strong);
   font-weight: 650;
+}
+
+.icon-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
 }
 
 .ghost-button:hover {
@@ -732,6 +743,93 @@ select:focus {
 
 .detail-markdown {
   margin-top: 10px;
+}
+
+.graph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.graph-open-button {
+  color: #1849b7;
+  border-color: #cfe0ff;
+  background: #f8fbff;
+}
+
+.graph-inspector-panel {
+  min-height: 0;
+}
+
+.graph-canvas {
+  min-height: 320px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #ffffff;
+}
+
+.graph-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.graph-svg rect {
+  fill: #ffffff;
+}
+
+.graph-edge line {
+  stroke: #b7c4d4;
+  stroke-width: 1.6;
+}
+
+.graph-edge text {
+  fill: var(--muted);
+  font-size: 10px;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 4px;
+}
+
+.graph-node {
+  cursor: pointer;
+}
+
+.graph-node circle {
+  stroke: #ffffff;
+  stroke-width: 3;
+  filter: drop-shadow(0 3px 8px rgba(15, 23, 42, 0.16));
+}
+
+.graph-node.selected circle {
+  stroke: #111827;
+  stroke-width: 4;
+}
+
+.graph-node text {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 720;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 4px;
+}
+
+.graph-node:focus {
+  outline: none;
+}
+
+.graph-node:focus circle {
+  stroke: var(--accent);
+}
+
+.graph-node-detail .token-row {
+  margin-bottom: 10px;
 }
 
 .empty-state {

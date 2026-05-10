@@ -171,16 +171,6 @@ class MCPServerConfig(Base):
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])
 
 
-class Neo4jConfig(Base):
-    """Neo4j graph synchronization settings."""
-
-    enabled: bool = True
-    uri: str = "bolt://127.0.0.1:7687"
-    username: str = "neo4j"
-    password: str = ""
-    database: str = "neo4j"
-
-
 class HelixConfig(Base):
     """HelixDB graph-vector backend settings."""
 
@@ -213,7 +203,6 @@ class KnowledgeConfig(Base):
     chunk_overlap_chars: int = Field(default=400, ge=0, le=5000)
     max_file_bytes: int = Field(default=256 * 1024 * 1024, ge=1024)
     max_chrome_rows: int = Field(default=10_000, ge=1)
-    neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
     helix: HelixConfig = Field(default_factory=HelixConfig)
 
 

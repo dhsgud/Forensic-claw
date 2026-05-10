@@ -51,7 +51,7 @@ class KnowledgeIngestTool(_KnowledgeTool):
     @property
     def description(self) -> str:
         return (
-            "Ingest a local evidence file or directory into the local RAG index and Neo4j graph. "
+            "Ingest a local evidence file or directory into the local RAG index and graph store. "
             "Use this for large logs, Chrome History SQLite databases, and evidence folders before "
             "answering questions about their contents. When it reports ready, tell the user they can ask questions."
         )
@@ -87,10 +87,6 @@ class KnowledgeIngestTool(_KnowledgeTool):
                     "type": ["string", "null"],
                     "description": "Investigator name to attach to graph source nodes.",
                 },
-                "sync_neo4j": {
-                    "type": "boolean",
-                    "description": "Push graph rows to Neo4j when configured. Defaults to true.",
-                },
             },
             "required": ["path"],
         }
@@ -103,7 +99,6 @@ class KnowledgeIngestTool(_KnowledgeTool):
         max_files: int | None = None,
         case_name: str | None = None,
         investigator_name: str | None = None,
-        sync_neo4j: bool = True,
         **_: Any,
     ) -> Any:
         try:
@@ -118,7 +113,6 @@ class KnowledgeIngestTool(_KnowledgeTool):
             max_files=max_files,
             case_name=case_name,
             investigator_name=investigator_name,
-            sync_neo4j=sync_neo4j,
         )
         return self.service.result_to_text(result)
 
@@ -174,7 +168,7 @@ class KnowledgeSearchTool(_KnowledgeTool):
 
 
 class KnowledgeStatusTool(_KnowledgeTool):
-    """Report RAG and Neo4j readiness."""
+    """Report RAG and graph backend readiness."""
 
     @property
     def name(self) -> str:
@@ -182,7 +176,7 @@ class KnowledgeStatusTool(_KnowledgeTool):
 
     @property
     def description(self) -> str:
-        return "Show local RAG store counts and Neo4j connectivity/readiness."
+        return "Show local RAG store counts and graph backend readiness."
 
     @property
     def parameters(self) -> dict[str, Any]:
