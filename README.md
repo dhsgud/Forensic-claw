@@ -75,6 +75,22 @@ Backend: HelixDB
 Endpoint: http://127.0.0.1:6969
 ```
 
+## 라이선스 및 고지
+
+Forensic-Claw는 GNU Affero General Public License v3.0 only (`AGPL-3.0-only`)로
+배포됩니다. 전체 라이선스 본문은 [LICENSE](LICENSE), 프로젝트 및 제3자 고지는
+[NOTICE](NOTICE)를 확인하세요.
+
+릴리즈 바이너리를 배포하거나 수정 버전을 네트워크 서비스로 운영하는 경우 AGPL-3.0
+조건에 따라 대응 소스 제공 의무가 생길 수 있습니다. 공개 소스 위치는
+<https://github.com/dhsgud/Forensic-claw> 입니다.
+
+HelixDB는 선택적 graph-vector knowledge backend로 연동되며, HelixDB 자체는
+AGPL-3.0 라이선스를 따릅니다. 이 저장소는 HelixDB 소스나 바이너리를 벤더링하지
+않고, Helix CLI와 Docker workflow를 통해 별도로 설치/빌드해 사용하도록 안내합니다.
+HelixDB 또는 HelixDB에서 파생된 산출물을 함께 배포하는 경우 HelixDB의 저작권,
+라이선스, 출처 고지를 유지하세요.
+
 자세한 Windows 배포 문서는 [Windows Native Packaging](docs/WINDOWS_NATIVE_PACKAGING.md)을 참고하세요.
 
 로컬 LLM 기반 에이전트 프레임워크이자 Native Windows 지향 포렌식 워크벤치의 기반 저장소입니다. 현재 이 저장소는 `discord`, `kakaotalk`, `webui` 채널과 `vllm`, `custom` provider를 중심으로 정리되어 있으며, WebUI 채팅/세션/읽기 API와 Windows 런타임 baseline까지 포함합니다.

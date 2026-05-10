@@ -4,7 +4,7 @@ version = "0.1.4.post5"
 description = "A local forensic agent framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = {text = "AGPL-3.0-only"}
 authors = [
     {name = "Forensic-Claw contributors"}
 ]
@@ -12,7 +12,7 @@ keywords = ["ai", "agent", "chatbot"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
@@ -67,6 +67,8 @@ allow-direct-references = true
 
 [tool.hatch.build]
 include = [
+    "LICENSE",
+    "NOTICE",
     "forensic_claw/**/*.py",
     "forensic_claw/**/*.hx",
     "forensic_claw/webui/**/*.html",
@@ -105,6 +107,7 @@ include = [
     "forensic_claw/",
     "README.md",
     "LICENSE",
+    "NOTICE",
 ]
 
 [tool.ruff]

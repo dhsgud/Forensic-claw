@@ -22,6 +22,10 @@ datas = collect_data_files(
         "**/*.pyo",
     ],
 )
+datas += [
+    (str(PROJECT_ROOT / "LICENSE"), "."),
+    (str(PROJECT_ROOT / "NOTICE"), "."),
+]
 
 hiddenimports = collect_submodules("forensic_claw")
 

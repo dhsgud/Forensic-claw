@@ -87,6 +87,15 @@ docker compose -f docker-compose.yml down
 ```
 
 Forensic-Claw should point to localhost port 6969 with knowledge.backend = "helix".
+
+Licensing:
+- Forensic-Claw is licensed under AGPL-3.0-only. See the Forensic-Claw LICENSE
+  and NOTICE files in the project or release bundle.
+- HelixDB is licensed under AGPL-3.0. This generated project expects users to
+  install, build, and run HelixDB separately. If you distribute HelixDB,
+  modified HelixDB, or artifacts derived from HelixDB, preserve HelixDB notices
+  and provide source as required by the AGPL-3.0 license.
+- HelixDB source and license: https://github.com/HelixDB/helix-db
 """
 
 
