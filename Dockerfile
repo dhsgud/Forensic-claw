@@ -15,7 +15,7 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Install Python dependencies first (cached layer)
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md LICENSE NOTICE ./
 RUN mkdir -p forensic_claw bridge && touch forensic_claw/__init__.py && \
     uv pip install --system --no-cache . && \
     rm -rf forensic_claw bridge
