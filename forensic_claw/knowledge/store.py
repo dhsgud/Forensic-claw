@@ -58,6 +58,17 @@ class SearchHit:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ChunkRecord:
+    """Stored chunk content for backend synchronization."""
+
+    id: str
+    document_id: str
+    chunk_index: int
+    text: str
+    metadata: dict[str, Any]
+
+
 class KnowledgeStore:
     """Persistent local RAG index with a small graph mirror."""
 
@@ -407,6 +418,29 @@ class KnowledgeStore:
                 for row in relationships
             ],
         }
+
+    def chunks_for_document(self, document_id: str) -> list[ChunkRecord]:
+        """Return stored chunks for one document in ingestion order."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, document_id, chunk_index, text, metadata_json
+                FROM chunks
+                WHERE document_id = ?
+                ORDER BY chunk_index
+                """,
+                (document_id,),
+            ).fetchall()
+        return [
+            ChunkRecord(
+                id=row["id"],
+                document_id=row["document_id"],
+                chunk_index=int(row["chunk_index"]),
+                text=row["text"],
+                metadata=json.loads(row["metadata_json"] or "{}"),
+            )
+            for row in rows
+        ]
 
     def stats(self) -> dict[str, int | str]:
         """Return store statistics."""

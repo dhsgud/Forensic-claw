@@ -20,6 +20,8 @@ const state = {
   knowledgeConfig: null,
   isApplyingKnowledge: false,
   caseProfile: null,
+  attachments: [],
+  dragDepth: 0,
 };
 
 const SETUP_STORAGE_KEY = "forensic_claw_webui_setup_v1";
@@ -48,10 +50,13 @@ const activeScope = document.querySelector("#active-scope");
 const activeSessionTitle = document.querySelector("#active-session-title");
 const connectionStatus = document.querySelector("#connection-status");
 const statusLine = document.querySelector("#status-line");
+const dropHint = document.querySelector("#drop-hint");
+const attachmentTray = document.querySelector("#attachment-tray");
 const slashMenu = document.querySelector("#slash-menu");
 const sessionsList = document.querySelector("#sessions-list");
 const casesList = document.querySelector("#cases-list");
 const chatLog = document.querySelector("#chat-log");
+const composerShell = document.querySelector(".composer-shell");
 const composer = document.querySelector("#composer");
 const messageInput = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
@@ -72,7 +77,12 @@ const modelSave = document.querySelector("#model-save");
 const modelSummary = document.querySelector("#model-summary");
 const knowledgeStatus = document.querySelector("#knowledge-status");
 const knowledgeEnabled = document.querySelector("#knowledge-enabled");
+const knowledgeBackend = document.querySelector("#knowledge-backend");
 const knowledgeStoreDir = document.querySelector("#knowledge-store-dir");
+const helixEnabled = document.querySelector("#helix-enabled");
+const helixPort = document.querySelector("#helix-port");
+const helixApiEndpoint = document.querySelector("#helix-api-endpoint");
+const helixFallback = document.querySelector("#helix-fallback");
 const neo4jEnabled = document.querySelector("#neo4j-enabled");
 const neo4jUri = document.querySelector("#neo4j-uri");
 const neo4jUsername = document.querySelector("#neo4j-username");
@@ -153,11 +163,17 @@ function setKnowledgeStatus(text, kind = "") {
 function knowledgePayloadFromFields(fields) {
   const payload = {
     enabled: Boolean(fields.knowledgeEnabled?.checked),
+    backend: fields.backend?.value || "sqlite",
     storeDir: fields.storeDir?.value.trim() || "knowledge",
     neo4jEnabled: Boolean(fields.neo4jEnabled?.checked),
     uri: fields.uri?.value.trim() || "",
     username: fields.username?.value.trim() || "",
     database: fields.database?.value.trim() || "neo4j",
+    helixEnabled: Boolean(fields.helixEnabled?.checked),
+    helixLocal: true,
+    helixPort: Number(fields.helixPort?.value || 6969),
+    helixApiEndpoint: fields.helixApiEndpoint?.value.trim() || "",
+    helixFallbackToSqlite: fields.helixFallback?.checked ?? true,
   };
   const password = fields.password?.value || "";
   if (password) {
@@ -169,7 +185,12 @@ function knowledgePayloadFromFields(fields) {
 function currentKnowledgeForm() {
   return knowledgePayloadFromFields({
     knowledgeEnabled,
+    backend: knowledgeBackend,
     storeDir: knowledgeStoreDir,
+    helixEnabled,
+    helixPort,
+    helixApiEndpoint,
+    helixFallback,
     neo4jEnabled,
     uri: neo4jUri,
     username: neo4jUsername,
@@ -181,7 +202,12 @@ function currentKnowledgeForm() {
 function setupKnowledgeFormPayload() {
   return knowledgePayloadFromFields({
     knowledgeEnabled: { checked: true },
+    backend: { value: state.knowledgeConfig?.backend || "sqlite" },
     storeDir: { value: state.knowledgeConfig?.storeDir || "knowledge" },
+    helixEnabled: { checked: Boolean(state.knowledgeConfig?.helix?.enabled) },
+    helixPort: { value: state.knowledgeConfig?.helix?.port || 6969 },
+    helixApiEndpoint: { value: state.knowledgeConfig?.helix?.apiEndpoint || "" },
+    helixFallback: { checked: state.knowledgeConfig?.helix?.fallbackToSqlite ?? true },
     neo4jEnabled: setupNeo4jEnabled,
     uri: setupNeo4jUri,
     username: setupNeo4jUsername,
@@ -192,7 +218,7 @@ function setupKnowledgeFormPayload() {
 
 function renderKnowledgeConfig(config) {
   state.knowledgeConfig = config || null;
-  if (!knowledgeEnabled || !knowledgeStoreDir || !neo4jEnabled || !neo4jUri || !knowledgeSummary) return;
+  if (!knowledgeEnabled || !knowledgeBackend || !knowledgeStoreDir || !neo4jEnabled || !neo4jUri || !knowledgeSummary) return;
   if (!config) {
     setKnowledgeStatus("offline", "warn");
     knowledgeSummary.textContent = "Knowledge settings are unavailable.";
@@ -200,9 +226,16 @@ function renderKnowledgeConfig(config) {
   }
 
   const neo4j = config.neo4j || {};
+  const helix = config.helix || {};
   const neo4jStatus = neo4j.status || {};
+  const helixStatus = helix.status || {};
   knowledgeEnabled.checked = Boolean(config.enabled);
+  knowledgeBackend.value = config.backend || "sqlite";
   knowledgeStoreDir.value = config.storeDir || "knowledge";
+  if (helixEnabled) helixEnabled.checked = Boolean(helix.enabled);
+  if (helixPort) helixPort.value = helix.port || 6969;
+  if (helixApiEndpoint) helixApiEndpoint.value = helix.apiEndpoint || "";
+  if (helixFallback) helixFallback.checked = helix.fallbackToSqlite ?? true;
   neo4jEnabled.checked = Boolean(neo4j.enabled);
   neo4jUri.value = neo4j.uri || "";
   neo4jUsername.value = neo4j.username || "";
@@ -212,10 +245,15 @@ function renderKnowledgeConfig(config) {
     neo4jPassword.placeholder = neo4j.passwordConfigured ? "Saved password configured" : "";
   }
 
-  const stateText = neo4j.enabled ? (neo4jStatus.state || "not tested") : "disabled";
+  const usingHelix = (config.backend || "sqlite") === "helix";
+  const stateText = usingHelix
+    ? (helixStatus.state || (helix.enabled ? "configured" : "disabled"))
+    : neo4j.enabled ? (neo4jStatus.state || "not tested") : "disabled";
   const badgeKind = stateText === "connected" ? "success" : stateText === "disabled" ? "" : "warn";
   setKnowledgeStatus(stateText, badgeKind);
-  knowledgeSummary.textContent = `RAG ${config.enabled ? "enabled" : "disabled"} - ${config.storeDir || "knowledge"} - Neo4j ${stateText}`;
+  knowledgeSummary.textContent = usingHelix
+    ? `RAG ${config.enabled ? "enabled" : "disabled"} - HelixDB ${stateText} - port ${helix.port || 6969}`
+    : `RAG ${config.enabled ? "enabled" : "disabled"} - ${config.storeDir || "knowledge"} - Neo4j ${stateText}`;
 }
 
 function renderSetupKnowledgeConfig(config) {
@@ -254,7 +292,7 @@ function applySetupVisibility() {
   setupScreen?.classList.toggle("is-hidden", ready);
   appShell?.classList.toggle("is-hidden", !ready);
   messageInput.disabled = !ready;
-  sendButton.disabled = !ready || !state.sessionId || state.isStopping;
+  updateComposerActions();
   if (state.caseProfile) {
     activeScope.textContent = state.caseProfile.caseName;
     sessionMeta.textContent = `${state.caseProfile.caseName} - ${state.caseProfile.investigatorName}`;
@@ -572,12 +610,19 @@ function setConnection(online) {
 }
 
 function updateComposerActions() {
-  sendButton.disabled = !state.caseProfile || !state.sessionId || state.isStopping;
+  const hasBusyAttachment = state.attachments.some((item) => item.status === "uploading" || item.status === "processing");
+  sendButton.disabled = !state.caseProfile || !state.sessionId || state.isStopping || hasBusyAttachment;
   sendButton.textContent = state.isStopping ? "Stopping..." : state.isGenerating ? "Stop" : "Send";
   sendButton.classList.toggle("is-stop", state.isGenerating || state.isStopping);
   sendButton.setAttribute(
     "aria-label",
-    state.isStopping ? "Stopping response generation" : state.isGenerating ? "Stop response generation" : "Send message"
+    hasBusyAttachment
+      ? "Wait for attachments to finish processing"
+      : state.isStopping
+        ? "Stopping response generation"
+        : state.isGenerating
+          ? "Stop response generation"
+          : "Send message"
   );
 }
 
@@ -951,11 +996,14 @@ function refreshSuggestionLists() {
 
 async function apiJson(url, options = {}) {
   const response = await fetch(url, options);
+  const raw = await response.text();
   let data = {};
-  try {
-    data = await response.json();
-  } catch (_error) {
-    data = {};
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (_error) {
+      data = { error: raw.trim() };
+    }
   }
   if (!response.ok) {
     throw new Error(data.error || `HTTP ${response.status}`);
@@ -972,6 +1020,120 @@ async function apiJsonOptional(url) {
     return await response.json();
   } catch (_error) {
     return null;
+  }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function attachmentLabel(item) {
+  if (item.error) return `failed: ${item.error}`;
+  if (item.status === "uploading") return "uploading";
+  if (item.status === "processing") return "processing";
+  if (item.status === "ready") return "RAG ready";
+  if (item.status === "vision_metadata_indexed") return "vision indexed";
+  if (item.status === "vision_metadata_ready") return "vision metadata";
+  if (item.status === "stored_pending_parser") return "stored";
+  if (item.status === "stored_unsupported") return "unsupported";
+  return item.status || "stored";
+}
+
+function renderAttachments() {
+  if (!attachmentTray) return;
+  attachmentTray.hidden = state.attachments.length === 0;
+  attachmentTray.innerHTML = "";
+  for (const item of state.attachments) {
+    const chip = document.createElement("div");
+    chip.className = "attachment-chip";
+    chip.classList.toggle("is-error", Boolean(item.error));
+    chip.classList.toggle("is-busy", item.status === "uploading" || item.status === "processing");
+    chip.innerHTML = `
+      <div class="attachment-main">
+        <strong>${escapeHtml(item.fileName || item.name || "file")}</strong>
+        <small>${escapeHtml(item.kind || "file")} - ${escapeHtml(formatBytes(item.sizeBytes || item.size || 0))} - ${escapeHtml(attachmentLabel(item))}</small>
+      </div>
+      <button class="attachment-remove" type="button" aria-label="Remove attachment">x</button>
+    `;
+    chip.querySelector(".attachment-remove").addEventListener("click", () => {
+      state.attachments = state.attachments.filter((candidate) => candidate.clientId !== item.clientId);
+      renderAttachments();
+      updateComposerActions();
+    });
+    attachmentTray.appendChild(chip);
+  }
+}
+
+function updateAttachment(clientId, patch) {
+  state.attachments = state.attachments.map((item) =>
+    item.clientId === clientId ? { ...item, ...patch } : item
+  );
+  renderAttachments();
+  updateComposerActions();
+}
+
+async function uploadAttachment(file) {
+  if (!file) return;
+  if (!state.caseProfile) {
+    applySetupVisibility();
+    setupStatus.textContent = "파일을 첨부하려면 먼저 초기 설정을 완료하세요.";
+    return;
+  }
+
+  const clientId = `local_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  state.attachments.push({
+    clientId,
+    fileName: file.name,
+    sizeBytes: file.size,
+    kind: file.type || "file",
+    status: "uploading",
+  });
+  renderAttachments();
+  updateComposerActions();
+  setStatus(`${file.name} 업로드를 시작했습니다.`);
+
+  const form = new FormData();
+  form.append("sessionId", state.sessionId || "");
+  form.append("caseName", state.caseProfile.caseName);
+  form.append("investigatorName", state.caseProfile.investigatorName);
+  form.append("file", file, file.name);
+
+  try {
+    updateAttachment(clientId, { status: "processing" });
+    const data = await apiJson("/api/uploads", { method: "POST", body: form });
+    updateAttachment(clientId, {
+      ...(data.upload || {}),
+      clientId,
+      error: "",
+    });
+    setStatus(`${file.name} 처리 완료: ${attachmentLabel(data.upload || {})}`);
+  } catch (error) {
+    updateAttachment(clientId, {
+      status: "failed",
+      error: error.message || "upload failed",
+    });
+    setStatus(`파일 처리 실패: ${error.message}`);
+  }
+}
+
+function handleDroppedFiles(fileList) {
+  const files = Array.from(fileList || []).filter((file) => file && file.name);
+  if (!files.length) return;
+  for (const file of files) {
+    uploadAttachment(file).catch((error) => {
+      console.error(error);
+      setStatus(`파일 업로드 중 오류: ${error.message}`);
+    });
+  }
+}
+
+function setDropActive(active) {
+  composerShell?.classList.toggle("drag-active", active);
+  if (dropHint) {
+    dropHint.hidden = !active;
   }
 }
 
@@ -1628,9 +1790,13 @@ async function sendMessage(event) {
 
   const rawText = messageInput.value;
   const text = rawText.trim();
-  if (!text) return;
+  const readyAttachments = state.attachments.filter((item) => item.uploadId && !item.error);
+  if (!text && !readyAttachments.length) return;
 
-  makeMessage("user", rawText.trim(), "user");
+  const attachmentText = readyAttachments.length
+    ? `첨부 파일:\n${readyAttachments.map((item) => `- ${item.fileName} (${attachmentLabel(item)})`).join("\n")}`
+    : "";
+  makeMessage("user", [rawText.trim(), attachmentText].filter(Boolean).join("\n\n"), "user");
   if (state.pendingAssistant) {
     finalizeAssistantNode(state.pendingAssistant);
     state.pendingAssistant = null;
@@ -1648,12 +1814,15 @@ async function sendMessage(event) {
         caseName: state.caseProfile.caseName,
         investigatorName: state.caseProfile.investigatorName,
         text: rawText,
+        attachments: readyAttachments.map((item) => ({ uploadId: item.uploadId })),
       }),
     });
 
     state.activeSessionKey = data.sessionKey;
     activeSessionTitle.textContent = state.caseProfile.caseName;
     messageInput.value = "";
+    state.attachments = [];
+    renderAttachments();
     closeSlashMenu();
 
     await refreshSessions();
@@ -1758,6 +1927,35 @@ artifactIdInput.addEventListener("change", () => {
     return;
   }
   loadArtifact(caseId, artifactId).catch((error) => setStatus(`artifact 반영 실패: ${error.message}`));
+});
+
+composerShell?.addEventListener("dragenter", (event) => {
+  if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+  event.preventDefault();
+  state.dragDepth += 1;
+  setDropActive(true);
+});
+composerShell?.addEventListener("dragover", (event) => {
+  if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "copy";
+  }
+  setDropActive(true);
+});
+composerShell?.addEventListener("dragleave", (event) => {
+  if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+  state.dragDepth = Math.max(0, state.dragDepth - 1);
+  if (state.dragDepth === 0) {
+    setDropActive(false);
+  }
+});
+composerShell?.addEventListener("drop", (event) => {
+  if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+  event.preventDefault();
+  state.dragDepth = 0;
+  setDropActive(false);
+  handleDroppedFiles(event.dataTransfer?.files);
 });
 
 messageInput.addEventListener("compositionstart", () => {

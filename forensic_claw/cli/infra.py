@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
@@ -11,7 +12,7 @@ from rich.console import Console
 
 infra_app = typer.Typer(help="Manage optional storage infrastructure")
 console = Console()
-InfraBackend = Literal["docker", "native", "external"]
+InfraBackend = Literal["docker", "native", "external", "helix"]
 
 
 INFRA_COMPOSE_YAML = """name: forensic-claw-infra
@@ -80,6 +81,40 @@ NEO4J_DATABASE=neo4j
 """
 
 
+HELIX_TOML = """[project]
+name = "forensic-claw-knowledge"
+queries = "./db/"
+
+[local.dev]
+port = 6969
+build_mode = "dev"
+bm25 = true
+mcp = false
+"""
+
+
+HELIX_README = """# Forensic-Claw HelixDB Backend
+
+This directory is a HelixDB project for the Forensic-Claw knowledge store.
+
+Requirements:
+- Docker Desktop
+- Helix CLI: curl -sSL https://install.helix-db.com | bash
+
+Commands:
+
+```powershell
+helix check dev
+helix push dev
+helix status
+helix logs dev --live
+helix stop dev
+```
+
+Forensic-Claw should point to localhost port 6969 with knowledge.backend = "helix".
+"""
+
+
 def get_default_infra_dir() -> Path:
     """Return the user-scoped infra directory used by installed builds."""
     return Path.home() / ".forensic-claw" / "infra"
@@ -110,6 +145,8 @@ def ensure_backend_files(
     """Write backend-specific infra files for installed/native deployments."""
     if backend == "docker":
         return ensure_infra_files(infra_dir, force=force)
+    if backend == "helix":
+        return ensure_helix_files(infra_dir, force=force)
 
     target_dir = infra_dir or get_default_infra_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -125,8 +162,56 @@ def ensure_backend_files(
     return path, path
 
 
+def ensure_helix_files(infra_dir: Path | None = None, *, force: bool = False) -> tuple[Path, Path]:
+    """Write the HelixDB project used by installed/native deployments."""
+    target_dir = infra_dir or get_default_infra_dir()
+    helix_dir = target_dir / "helix"
+    db_dir = helix_dir / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    toml_path = helix_dir / "helix.toml"
+    query_path = db_dir / "forensic_claw.hx"
+    readme_path = helix_dir / "README.md"
+
+    if force or not toml_path.exists():
+        toml_path.write_text(HELIX_TOML, encoding="utf-8")
+    if force or not query_path.exists():
+        query_path.write_text(_default_helix_queries(), encoding="utf-8")
+    if force or not readme_path.exists():
+        readme_path.write_text(HELIX_README, encoding="utf-8")
+
+    return toml_path, readme_path
+
+
+def _default_helix_queries() -> str:
+    """Return the packaged HelixQL query contract."""
+    return (
+        files("forensic_claw.knowledge")
+        .joinpath("helix_queries.hx")
+        .read_text(encoding="utf-8")
+    )
+
+
 def _compose_command(compose_path: Path, args: list[str]) -> list[str]:
     return ["docker", "compose", "-f", str(compose_path), *args]
+
+
+def _helix_project_dir(infra_dir: Path | None = None) -> Path:
+    target_dir = infra_dir or get_default_infra_dir()
+    return target_dir / "helix"
+
+
+def run_helix(args: list[str], infra_dir: Path | None = None) -> int:
+    """Run Helix CLI against the generated Helix project."""
+    ensure_helix_files(infra_dir)
+    project_dir = _helix_project_dir(infra_dir)
+    try:
+        result = subprocess.run(["helix", *args], cwd=project_dir, check=False)
+    except FileNotFoundError:
+        console.print("[red]Helix CLI was not found.[/red] Install it with:")
+        console.print("[cyan]curl -sSL https://install.helix-db.com | bash[/cyan]")
+        return 127
+    return result.returncode
 
 
 def run_compose(args: list[str], infra_dir: Path | None = None) -> int:
@@ -147,7 +232,11 @@ def run_compose(args: list[str], infra_dir: Path | None = None) -> int:
 @infra_app.command("init")
 def infra_init(
     path: Path | None = typer.Option(None, "--path", help="Infra directory"),
-    backend: InfraBackend = typer.Option("docker", "--backend", help="docker, native, or external"),
+    backend: InfraBackend = typer.Option(
+        "docker",
+        "--backend",
+        help="docker, native, external, or helix",
+    ),
     force: bool = typer.Option(False, "--force", help="Overwrite generated infra files"),
 ) -> None:
     """Create storage infrastructure files for installed/native deployments."""
@@ -160,9 +249,13 @@ def infra_init(
 @infra_app.command("up")
 def infra_up(
     path: Path | None = typer.Option(None, "--path", help="Infra directory"),
-    backend: InfraBackend = typer.Option("docker", "--backend", help="docker, native, or external"),
+    backend: InfraBackend = typer.Option(
+        "docker",
+        "--backend",
+        help="docker, native, external, or helix",
+    ),
 ) -> None:
-    """Start or describe the selected Neo4j storage backend."""
+    """Start or describe the selected storage backend."""
     if backend == "native":
         ensure_backend_files("native", path)
         console.print(
@@ -177,6 +270,12 @@ def infra_up(
             "Configure the remote Neo4j URI in WebUI."
         )
         raise typer.Exit(0)
+    if backend == "helix":
+        check_code = run_helix(["check", "dev"], path)
+        if check_code != 0:
+            raise typer.Exit(check_code)
+        code = run_helix(["push", "dev"], path)
+        raise typer.Exit(code)
     code = run_compose(["up", "-d"], path)
     raise typer.Exit(code)
 
@@ -184,10 +283,19 @@ def infra_up(
 @infra_app.command("down")
 def infra_down(
     path: Path | None = typer.Option(None, "--path", help="Infra directory"),
-    backend: InfraBackend = typer.Option("docker", "--backend", help="docker, native, or external"),
+    backend: InfraBackend = typer.Option(
+        "docker",
+        "--backend",
+        help="docker, native, external, or helix",
+    ),
     delete_data: bool = typer.Option(False, "--delete-data", help="Also delete Docker volumes"),
 ) -> None:
-    """Stop Neo4j storage infrastructure."""
+    """Stop storage infrastructure."""
+    if backend == "helix":
+        if delete_data:
+            console.print("[yellow]Helix data deletion is not handled here. Use Helix backup/delete tools.[/yellow]")
+        code = run_helix(["stop", "dev"], path)
+        raise typer.Exit(code)
     if backend != "docker":
         console.print(f"[yellow]{backend} backend is not managed by Docker Compose.[/yellow]")
         raise typer.Exit(0)
@@ -199,11 +307,35 @@ def infra_down(
 @infra_app.command("status")
 def infra_status(
     path: Path | None = typer.Option(None, "--path", help="Infra directory"),
-    backend: InfraBackend = typer.Option("docker", "--backend", help="docker, native, or external"),
+    backend: InfraBackend = typer.Option(
+        "docker",
+        "--backend",
+        help="docker, native, external, or helix",
+    ),
 ) -> None:
-    """Show Docker Compose status for the storage infrastructure."""
+    """Show status for the storage infrastructure."""
+    if backend == "helix":
+        code = run_helix(["status"], path)
+        raise typer.Exit(code)
     if backend != "docker":
         console.print(f"[yellow]{backend} backend status is checked through WebUI connection test.[/yellow]")
         raise typer.Exit(0)
     code = run_compose(["ps"], path)
+    raise typer.Exit(code)
+
+
+@infra_app.command("logs")
+def infra_logs(
+    path: Path | None = typer.Option(None, "--path", help="Infra directory"),
+    backend: Literal["docker", "helix"] = typer.Option(
+        "docker",
+        "--backend",
+        help="docker or helix",
+    ),
+) -> None:
+    """Stream logs for Docker-managed storage infrastructure."""
+    if backend == "helix":
+        code = run_helix(["logs", "dev", "--live"], path)
+        raise typer.Exit(code)
+    code = run_compose(["logs", "-f"], path)
     raise typer.Exit(code)

@@ -69,6 +69,7 @@ allow-direct-references = true
 [tool.hatch.build]
 include = [
     "forensic_claw/**/*.py",
+    "forensic_claw/**/*.hx",
     "forensic_claw/webui/**/*.html",
     "forensic_claw/webui/**/*.css",
     "forensic_claw/webui/**/*.js",

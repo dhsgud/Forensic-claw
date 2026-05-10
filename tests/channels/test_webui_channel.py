@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer
 
 from forensic_claw.bus.events import OutboundMessage
 from forensic_claw.bus.queue import MessageBus
 from forensic_claw.channels.webui import WebUIChannel
+from forensic_claw.config.schema import KnowledgeConfig
+from forensic_claw.knowledge.service import KnowledgeService
 from forensic_claw.session.manager import SessionManager
 from forensic_claw.session.scopes import build_scoped_session_key
 
@@ -70,11 +74,13 @@ class FakeModelSettings:
 
 
 class FakeKnowledgeSettings:
-    def __init__(self) -> None:
+    def __init__(self, service=None) -> None:
+        self.service = service
         self.applied: list[dict] = []
         self.tested: list[dict] = []
         self._snapshot = {
             "enabled": True,
+            "backend": "sqlite",
             "storeDir": "knowledge",
             "chunkChars": 6000,
             "chunkOverlapChars": 400,
@@ -88,6 +94,14 @@ class FakeKnowledgeSettings:
                 "passwordConfigured": False,
                 "status": {"enabled": True, "state": "unavailable"},
             },
+            "helix": {
+                "enabled": False,
+                "local": True,
+                "port": 6969,
+                "apiEndpoint": "",
+                "fallbackToSqlite": True,
+                "status": {"enabled": False, "state": "disabled"},
+            },
         }
 
     def snapshot(self) -> dict:
@@ -97,8 +111,22 @@ class FakeKnowledgeSettings:
         self.applied.append(kwargs)
         if kwargs.get("enabled") is not None:
             self._snapshot["enabled"] = kwargs["enabled"]
+        if kwargs.get("backend") is not None:
+            self._snapshot["backend"] = kwargs["backend"]
         if kwargs.get("store_dir") is not None:
             self._snapshot["storeDir"] = kwargs["store_dir"]
+        helix = self._snapshot["helix"]
+        if kwargs.get("helix_enabled") is not None:
+            helix["enabled"] = kwargs["helix_enabled"]
+        if kwargs.get("helix_local") is not None:
+            helix["local"] = kwargs["helix_local"]
+        if kwargs.get("helix_port") is not None:
+            helix["port"] = kwargs["helix_port"]
+        if kwargs.get("helix_api_endpoint") is not None:
+            helix["apiEndpoint"] = kwargs["helix_api_endpoint"]
+        if kwargs.get("helix_fallback_to_sqlite") is not None:
+            helix["fallbackToSqlite"] = kwargs["helix_fallback_to_sqlite"]
+        helix["status"] = {"enabled": helix["enabled"], "state": "configured"}
         neo4j = self._snapshot["neo4j"]
         if kwargs.get("neo4j_enabled") is not None:
             neo4j["enabled"] = kwargs["neo4j_enabled"]
@@ -115,6 +143,12 @@ class FakeKnowledgeSettings:
 
     def test_connection(self, **kwargs) -> dict:
         self.tested.append(kwargs)
+        if kwargs.get("backend") == "helix":
+            return {
+                "enabled": kwargs.get("helix_enabled"),
+                "state": "configured",
+                "port": kwargs.get("helix_port") or 6969,
+            }
         return {
             "enabled": kwargs.get("enabled"),
             "state": "connected",
@@ -163,6 +197,10 @@ def _write_case_fixture(workspace: Path) -> None:
         encoding="utf-8",
     )
     (case_dir / "sources" / "SRC-001" / "raw" / "Security.evtx").write_text("EVTXDATA", encoding="utf-8")
+
+
+def _knowledge_config() -> KnowledgeConfig:
+    return KnowledgeConfig(neo4j={"enabled": False}, chunk_chars=1000, chunk_overlap_chars=0)
 
 
 @pytest.mark.asyncio
@@ -272,6 +310,7 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
         assert knowledge_settings.applied == [
             {
                 "enabled": True,
+                "backend": None,
                 "store_dir": "knowledge-live",
                 "neo4j_enabled": True,
                 "uri": "bolt://127.0.0.1:7688",
@@ -279,6 +318,11 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
                 "password": "secret",
                 "password_supplied": True,
                 "database": "forensic",
+                "helix_enabled": None,
+                "helix_local": None,
+                "helix_port": None,
+                "helix_api_endpoint": None,
+                "helix_fallback_to_sqlite": None,
             }
         ]
 
@@ -293,13 +337,72 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
         assert knowledge_settings.tested == [
             {
                 "enabled": True,
+                "backend": None,
                 "uri": "bolt://127.0.0.1:7688",
                 "username": None,
                 "password": None,
                 "password_supplied": False,
                 "database": None,
+                "helix_enabled": None,
+                "helix_local": None,
+                "helix_port": None,
+                "helix_api_endpoint": None,
             }
         ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_knowledge_config_api_updates_and_tests_helix_backend(
+    tmp_path: Path,
+) -> None:
+    bus = MessageBus()
+    channel = WebUIChannel(
+        {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 8765,
+            "allowFrom": ["*"],
+        },
+        bus,
+    )
+    knowledge_settings = FakeKnowledgeSettings()
+    channel.bind_runtime(
+        session_manager=SessionManager(tmp_path),
+        knowledge_settings=knowledge_settings,
+    )
+    client = TestClient(TestServer(channel.create_app()))
+    await client.start_server()
+
+    try:
+        response = await client.patch(
+            "/api/knowledge-config",
+            json={
+                "enabled": True,
+                "backend": "helix",
+                "helixEnabled": True,
+                "helixPort": 6969,
+                "helixApiEndpoint": "",
+                "helixFallbackToSqlite": True,
+            },
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["knowledgeConfig"]["backend"] == "helix"
+        assert payload["knowledgeConfig"]["helix"]["enabled"] is True
+        assert knowledge_settings.applied[-1]["backend"] == "helix"
+        assert knowledge_settings.applied[-1]["helix_enabled"] is True
+
+        response = await client.post(
+            "/api/knowledge-config/test",
+            json={"backend": "helix", "helixEnabled": True, "helixPort": 6969},
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["ok"] is True
+        assert payload["result"]["state"] == "configured"
+        assert knowledge_settings.tested[-1]["backend"] == "helix"
     finally:
         await client.close()
 
@@ -340,6 +443,167 @@ async def test_webui_bootstrap_and_chat_publish_scoped_inbound(tmp_path: Path) -
         assert inbound.metadata["investigator_name"] == "Investigator One"
         assert inbound.session_key == f"webui:{session_id}:case:Case-Alpha:artifact:Prefetch-1"
         assert channel.supports_streaming is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_upload_api_indexes_text_file_when_knowledge_service_is_bound(tmp_path: Path) -> None:
+    bus = MessageBus()
+    channel = WebUIChannel(
+        {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 8765,
+            "allowFrom": ["*"],
+            "streaming": True,
+        },
+        bus,
+    )
+    knowledge_service = KnowledgeService(tmp_path, _knowledge_config())
+    channel.bind_runtime(
+        session_manager=SessionManager(tmp_path),
+        knowledge_settings=FakeKnowledgeSettings(service=knowledge_service),
+    )
+    client = TestClient(TestServer(channel.create_app()))
+    await client.start_server()
+
+    try:
+        form = FormData()
+        form.add_field("sessionId", "sess_upload")
+        form.add_field("caseName", "Case Upload")
+        form.add_field("investigatorName", "Investigator One")
+        form.add_field(
+            "file",
+            b"2026-05-09 powershell.exe connected to 10.0.0.5",
+            filename="events.log",
+            content_type="text/plain",
+        )
+
+        response = await client.post("/api/uploads", data=form)
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["upload"]["kind"] == "text"
+        assert payload["upload"]["status"] == "ready"
+        assert payload["upload"]["ingest"]["chunks"] >= 1
+        assert knowledge_service.search("powershell 10.0.0.5")["hits"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_chat_publishes_attachment_context_when_upload_is_referenced(tmp_path: Path) -> None:
+    bus = MessageBus()
+    channel = WebUIChannel(
+        {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 8765,
+            "allowFrom": ["*"],
+            "streaming": True,
+        },
+        bus,
+    )
+    knowledge_service = KnowledgeService(tmp_path, _knowledge_config())
+    channel.bind_runtime(
+        session_manager=SessionManager(tmp_path),
+        knowledge_settings=FakeKnowledgeSettings(service=knowledge_service),
+    )
+    client = TestClient(TestServer(channel.create_app()))
+    await client.start_server()
+
+    try:
+        form = FormData()
+        form.add_field("sessionId", "sess_upload")
+        form.add_field("caseName", "Case Upload")
+        form.add_field("investigatorName", "Investigator One")
+        form.add_field(
+            "file",
+            b"cmd.exe launched powershell.exe against 10.0.0.5",
+            filename="events.log",
+            content_type="text/plain",
+        )
+        upload_response = await client.post("/api/uploads", data=form)
+        upload_payload = await upload_response.json()
+        upload_id = upload_payload["upload"]["uploadId"]
+
+        response = await client.post(
+            "/api/chat",
+            json={
+                "sessionId": "sess_upload",
+                "caseName": "Case Upload",
+                "investigatorName": "Investigator One",
+                "text": "",
+                "attachments": [{"uploadId": upload_id}],
+            },
+        )
+        assert response.status == 200
+
+        inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+        assert inbound.chat_id == "sess_upload"
+        assert "Attached Evidence Context" in inbound.content
+        assert "events.log" in inbound.content
+        assert "첨부 파일을 분석해줘." in inbound.content
+        assert inbound.media == []
+        assert inbound.metadata["attachments"][0]["uploadId"] == upload_id
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_webui_chat_attaches_image_media_when_image_upload_is_referenced(tmp_path: Path) -> None:
+    bus = MessageBus()
+    channel = WebUIChannel(
+        {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 8765,
+            "allowFrom": ["*"],
+            "streaming": True,
+        },
+        bus,
+    )
+    knowledge_service = KnowledgeService(tmp_path, _knowledge_config())
+    channel.bind_runtime(
+        session_manager=SessionManager(tmp_path),
+        knowledge_settings=FakeKnowledgeSettings(service=knowledge_service),
+    )
+    client = TestClient(TestServer(channel.create_app()))
+    await client.start_server()
+
+    try:
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + b"\x00\x00\x00\rIHDR"
+            + struct.pack(">II", 4, 5)
+            + b"\x08\x02\x00\x00\x00"
+            + b"\x00" * 12
+        )
+        form = FormData()
+        form.add_field("sessionId", "sess_upload")
+        form.add_field("caseName", "Case Upload")
+        form.add_field("investigatorName", "Investigator One")
+        form.add_field("file", png, filename="screen.png", content_type="image/png")
+        upload_response = await client.post("/api/uploads", data=form)
+        upload_payload = await upload_response.json()
+        upload_id = upload_payload["upload"]["uploadId"]
+
+        response = await client.post(
+            "/api/chat",
+            json={
+                "sessionId": "sess_upload",
+                "caseName": "Case Upload",
+                "investigatorName": "Investigator One",
+                "text": "이 이미지 확인해줘",
+                "attachments": [{"uploadId": upload_id}],
+            },
+        )
+        assert response.status == 200
+
+        inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+        assert inbound.media == [upload_payload["upload"]["storedPath"]]
+        assert "Vision summary" in inbound.content
+        assert inbound.metadata["attachments"][0]["vision"]["dimensions"] == {"width": 4, "height": 5}
     finally:
         await client.close()
 

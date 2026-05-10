@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forensic-Claw Local Workbench</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css?v=layout-20260509">
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=attachments-20260509">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
@@ -125,8 +125,31 @@
             <span>Enable local RAG</span>
           </label>
           <label class="field">
+            <span>Backend</span>
+            <select id="knowledge-backend">
+              <option value="sqlite">SQLite RAG + Neo4j</option>
+              <option value="helix">HelixDB</option>
+            </select>
+          </label>
+          <label class="field">
             <span>Store Directory</span>
             <input id="knowledge-store-dir" type="text" placeholder="knowledge">
+          </label>
+          <label class="field check-field">
+            <input id="helix-enabled" type="checkbox">
+            <span>Enable HelixDB</span>
+          </label>
+          <label class="field">
+            <span>Helix Port</span>
+            <input id="helix-port" type="number" min="1" max="65535" placeholder="6969">
+          </label>
+          <label class="field">
+            <span>Helix API Endpoint</span>
+            <input id="helix-api-endpoint" type="text" placeholder="http://127.0.0.1:6969">
+          </label>
+          <label class="field check-field">
+            <input id="helix-fallback" type="checkbox" checked>
+            <span>Fallback to SQLite if Helix query fails</span>
           </label>
           <label class="field check-field">
             <input id="neo4j-enabled" type="checkbox">
@@ -211,6 +234,8 @@
 
         <section class="composer-shell">
           <div id="status-line" class="status-line">연결을 준비하는 중입니다.</div>
+          <div id="drop-hint" class="drop-hint" hidden>파일을 여기에 놓으면 자동으로 분류하고 지식 저장소에 준비합니다.</div>
+          <div id="attachment-tray" class="attachment-tray" hidden></div>
           <div id="slash-menu" class="slash-menu" hidden></div>
           <form id="composer" class="composer">
             <textarea id="message-input" rows="4" placeholder="증거, 로그, 브라우저 기록에 대해 질문하세요"></textarea>
@@ -230,6 +255,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js?v=layout-20260509" defer></script>
+    <script src="/ui/assets/app.js?v=attachments-20260509" defer></script>
   </body>
 </html>

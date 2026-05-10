@@ -21,6 +21,12 @@ from forensic_claw.command import get_builtin_command_specs
 from forensic_claw.config.schema import Base
 from forensic_claw.session.manager import Session, SessionManager
 from forensic_claw.session.scopes import build_scoped_session_key, parse_scoped_session_key
+from forensic_claw.uploads import (
+    UploadNotFoundError,
+    UploadProcessingError,
+    UploadService,
+    build_attachment_context,
+)
 from forensic_claw.utils.helpers import (
     current_time_str,
     extract_message_thinking_text,
@@ -83,7 +89,7 @@ class WebUIChannel(BaseChannel):
         if self._app is not None:
             return self._app
 
-        app = web.Application(client_max_size=4 * 1024 * 1024)
+        app = web.Application(client_max_size=128 * 1024 * 1024)
         app.router.add_get("/", self._handle_root)
         app.router.add_get("/health", self._handle_health)
         app.router.add_get("/ui", self._handle_ui)
@@ -96,6 +102,7 @@ class WebUIChannel(BaseChannel):
         app.router.add_get("/api/knowledge-config", self._handle_knowledge_config)
         app.router.add_patch("/api/knowledge-config", self._handle_knowledge_config_update)
         app.router.add_post("/api/knowledge-config/test", self._handle_knowledge_config_test)
+        app.router.add_post("/api/uploads", self._handle_upload)
         app.router.add_post("/api/chat", self._handle_chat)
         app.router.add_post("/api/stop", self._handle_stop)
         app.router.add_get("/api/cases", self._handle_cases_list)
@@ -226,6 +233,15 @@ class WebUIChannel(BaseChannel):
     def _workspace_root(self) -> Path | None:
         return self._session_manager.workspace if self._session_manager else None
 
+    def _upload_service(self) -> UploadService | None:
+        workspace = self._workspace_root
+        if workspace is None:
+            return None
+        return UploadService(
+            workspace,
+            knowledge_service=getattr(self._knowledge_settings, "service", None),
+        )
+
     @property
     def _cases_root(self) -> Path | None:
         workspace = self._workspace_root
@@ -302,6 +318,25 @@ class WebUIChannel(BaseChannel):
     @staticmethod
     def _is_truthy(value: str | None) -> bool:
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _attachment_ids(value: Any) -> list[str]:
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise ValueError("attachments must be a list")
+        upload_ids: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                upload_id = item
+            elif isinstance(item, dict):
+                upload_id = item.get("uploadId") or item.get("upload_id") or item.get("id")
+            else:
+                upload_id = None
+            if not upload_id:
+                raise ValueError("attachment is missing uploadId")
+            upload_ids.append(str(upload_id))
+        return upload_ids
 
     def _json_response(
         self,
@@ -570,8 +605,10 @@ class WebUIChannel(BaseChannel):
     @staticmethod
     def _knowledge_config_args(body: dict[str, Any]) -> dict[str, Any]:
         neo4j = body.get("neo4j") if isinstance(body.get("neo4j"), dict) else {}
+        helix = body.get("helix") if isinstance(body.get("helix"), dict) else {}
         return {
             "enabled": body.get("enabled"),
+            "backend": body.get("backend"),
             "store_dir": body.get("storeDir", body.get("store_dir")),
             "neo4j_enabled": body.get(
                 "neo4jEnabled",
@@ -582,6 +619,17 @@ class WebUIChannel(BaseChannel):
             "password": body.get("password", neo4j.get("password")),
             "password_supplied": "password" in body or "password" in neo4j,
             "database": body.get("database", neo4j.get("database")),
+            "helix_enabled": body.get("helixEnabled", body.get("helix_enabled", helix.get("enabled"))),
+            "helix_local": body.get("helixLocal", body.get("helix_local", helix.get("local"))),
+            "helix_port": body.get("helixPort", body.get("helix_port", helix.get("port"))),
+            "helix_api_endpoint": body.get(
+                "helixApiEndpoint",
+                body.get("helix_api_endpoint", helix.get("apiEndpoint", helix.get("api_endpoint"))),
+            ),
+            "helix_fallback_to_sqlite": body.get(
+                "helixFallbackToSqlite",
+                body.get("helix_fallback_to_sqlite", helix.get("fallbackToSqlite", helix.get("fallback_to_sqlite"))),
+            ),
         }
 
     async def _handle_knowledge_config(self, _request: web.Request) -> web.Response:
@@ -621,15 +669,100 @@ class WebUIChannel(BaseChannel):
         args = self._knowledge_config_args(body)
         result = await asyncio.to_thread(
             self._knowledge_settings.test_connection,
+            backend=args["backend"],
             enabled=args["neo4j_enabled"],
             uri=args["uri"],
             username=args["username"],
             password=args["password"],
             password_supplied=args["password_supplied"],
             database=args["database"],
+            helix_enabled=args["helix_enabled"],
+            helix_local=args["helix_local"],
+            helix_port=args["helix_port"],
+            helix_api_endpoint=args["helix_api_endpoint"],
         )
-        connected = result.get("state") in {"connected", "disabled"}
+        connected = result.get("state") in {"connected", "configured", "disabled", "available"}
         return self._json_response({"ok": connected, "result": result})
+
+    async def _handle_upload(self, request: web.Request) -> web.Response:
+        upload_service = self._upload_service()
+        if upload_service is None:
+            logger.warning("WebUI upload rejected because session manager is unavailable")
+            return self._json_response({"ok": False, "error": "session_manager_unavailable"}, status=503)
+        if not request.content_type.startswith("multipart/"):
+            logger.warning("WebUI upload rejected because request is not multipart: contentType={}", request.content_type)
+            return self._json_response({"ok": False, "error": "multipart_required"}, status=400)
+
+        session_id = self._browser_session_from_request(request, create=True)
+        logger.info(
+            "WebUI upload request started: sessionId={} contentLength={}",
+            session_id,
+            request.content_length,
+        )
+        form_values: dict[str, str] = {}
+        file_name: str | None = None
+        file_content: bytes | None = None
+
+        try:
+            reader = await request.multipart()
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                if part.name == "file":
+                    file_name = part.filename
+                    chunks = bytearray()
+                    while True:
+                        chunk = await part.read_chunk(size=1024 * 1024)
+                        if not chunk:
+                            break
+                        chunks.extend(chunk)
+                    file_content = bytes(chunks)
+                    continue
+                if part.name:
+                    form_values[part.name] = (await part.text()).strip()
+        except Exception:
+            logger.exception("Failed to read WebUI upload payload")
+            return self._json_response({"ok": False, "error": "invalid_multipart"}, status=400)
+
+        session_id = form_values.get("sessionId") or session_id
+        if not session_id:
+            logger.warning("WebUI upload rejected because session id is missing")
+            return self._json_response({"ok": False, "error": "missing_session"}, status=400)
+        if file_content is None:
+            logger.warning("WebUI upload rejected because file field is missing: sessionId={}", session_id)
+            return self._json_response({"ok": False, "error": "missing_file"}, session_id=session_id, status=400)
+
+        try:
+            record = await asyncio.to_thread(
+                upload_service.save_bytes,
+                file_name=file_name,
+                content=file_content,
+                session_id=session_id,
+                case_name=form_values.get("caseName") or form_values.get("case_name"),
+                investigator_name=form_values.get("investigatorName") or form_values.get("investigator_name"),
+            )
+        except UploadProcessingError as exc:
+            logger.warning(
+                "WebUI upload processing failed: sessionId={} fileName={} error={}",
+                session_id,
+                file_name,
+                exc,
+            )
+            return self._json_response({"ok": False, "error": str(exc)}, session_id=session_id, status=400)
+
+        logger.info(
+            "WebUI upload request completed: sessionId={} uploadId={} status={} kind={} sizeBytes={}",
+            session_id,
+            record.upload_id,
+            record.status,
+            record.kind,
+            record.size_bytes,
+        )
+        return self._json_response(
+            {"ok": True, "sessionId": session_id, "upload": record.to_dict()},
+            session_id=session_id,
+        )
 
     async def _handle_chat(self, request: web.Request) -> web.Response:
         try:
@@ -645,10 +778,14 @@ class WebUIChannel(BaseChannel):
         investigator_name = str(
             body.get("investigatorName") or body.get("investigator_name") or ""
         ).strip()
+        try:
+            upload_ids = self._attachment_ids(body.get("attachments"))
+        except ValueError as exc:
+            return self._json_response({"ok": False, "error": str(exc)}, status=400)
 
         if not session_id:
             return self._json_response({"ok": False, "error": "missing_session"}, status=400)
-        if not text:
+        if not text and not upload_ids:
             return self._json_response({"ok": False, "error": "empty_text"}, session_id=session_id, status=400)
         if not case_name or not investigator_name:
             return self._json_response(
@@ -664,11 +801,47 @@ class WebUIChannel(BaseChannel):
             "case_name": case_name,
             "investigator_name": investigator_name,
         }
+        content = text
+        media: list[str] = []
+        if upload_ids:
+            upload_service = self._upload_service()
+            if upload_service is None:
+                logger.warning("WebUI chat rejected because upload service is unavailable: sessionId={}", session_id)
+                return self._json_response(
+                    {"ok": False, "error": "session_manager_unavailable"},
+                    session_id=session_id,
+                    status=503,
+                )
+            try:
+                records = await asyncio.to_thread(upload_service.load_many, upload_ids)
+            except UploadNotFoundError as exc:
+                logger.warning(
+                    "WebUI chat referenced missing attachment: sessionId={} uploadId={}",
+                    session_id,
+                    exc.args[0],
+                )
+                return self._json_response(
+                    {"ok": False, "error": f"attachment_not_found:{exc.args[0]}"},
+                    session_id=session_id,
+                    status=404,
+                )
+            attachment_context = build_attachment_context(records)
+            user_request = text or "첨부 파일을 분석해줘."
+            content = f"{attachment_context}\n\nUser Request:\n{user_request}"
+            media = [record.stored_path for record in records if record.kind == "image"]
+            metadata["attachments"] = [record.to_dict() for record in records]
+            logger.info(
+                "WebUI chat attached upload context: sessionId={} attachments={} imageMedia={}",
+                session_id,
+                len(records),
+                len(media),
+            )
 
         await self._handle_message(
             sender_id=session_id,
             chat_id=session_id,
-            content=text,
+            content=content,
+            media=media,
             metadata=metadata,
         )
 

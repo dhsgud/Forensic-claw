@@ -181,16 +181,40 @@ class Neo4jConfig(Base):
     database: str = "neo4j"
 
 
+class HelixConfig(Base):
+    """HelixDB graph-vector backend settings."""
+
+    enabled: bool = False
+    local: bool = True
+    port: int = Field(default=6969, ge=1, le=65535)
+    api_endpoint: str = ""
+    verbose: bool = False
+    fallback_to_sqlite: bool = True
+    request_timeout_seconds: float = Field(default=10.0, ge=1.0, le=300.0)
+    status_query: str = ""
+    upsert_source_query: str = "UpsertEvidenceSource"
+    upsert_chunk_query: str = "UpsertEvidenceChunk"
+    upsert_entity_query: str = "UpsertEvidenceEntity"
+    upsert_relationship_query: str = "UpsertEvidenceRelationship"
+    search_hybrid_query: str = "SearchEvidenceHybrid"
+    search_keyword_query: str = "SearchEvidenceKeyword"
+    search_vector_query: str = "SearchEvidenceVector"
+    entity_neighborhood_query: str = "GetEntityNeighborhood"
+    graph_query: str = "GetEvidenceGraph"
+
+
 class KnowledgeConfig(Base):
     """Local RAG and graph ingestion settings."""
 
     enabled: bool = True
+    backend: Literal["sqlite", "helix"] = "sqlite"
     store_dir: str = "knowledge"
     chunk_chars: int = Field(default=6000, ge=1000, le=50_000)
     chunk_overlap_chars: int = Field(default=400, ge=0, le=5000)
     max_file_bytes: int = Field(default=256 * 1024 * 1024, ge=1024)
     max_chrome_rows: int = Field(default=10_000, ge=1)
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
+    helix: HelixConfig = Field(default_factory=HelixConfig)
 
 
 class ToolsConfig(Base):

@@ -12,6 +12,7 @@ datas = collect_data_files(
     "forensic_claw",
     includes=[
         "webui/static/*",
+        "knowledge/*.hx",
         "templates/**/*",
         "skills/**/*",
     ],

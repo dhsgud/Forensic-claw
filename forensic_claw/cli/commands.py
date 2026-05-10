@@ -557,6 +557,7 @@ def gateway(
     from forensic_claw.runtime.knowledge_settings import RuntimeKnowledgeSettings
     from forensic_claw.runtime.model_settings import RuntimeModelSettings
     from forensic_claw.session.manager import SessionManager
+    from forensic_claw.utils.runtime_logging import configure_runtime_file_logging
 
     if verbose:
         import logging
@@ -569,9 +570,11 @@ def gateway(
         webui_host=webui_host,
         webui_port=webui_port,
     )
+    log_path = configure_runtime_file_logging("gateway", debug=verbose)
     port = port if port is not None else config.gateway.port
 
     console.print(f"{__logo__} Starting forensic-claw gateway version {__version__} on port {port}...")
+    console.print(f"[dim]Runtime log: {log_path}[/dim]")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
@@ -801,6 +804,7 @@ def agent(
     from forensic_claw.config.loader import get_config_path
     from forensic_claw.cron.service import CronService
     from forensic_claw.runtime.model_settings import RuntimeModelSettings
+    from forensic_claw.utils.runtime_logging import configure_runtime_file_logging
 
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
@@ -817,7 +821,9 @@ def agent(
     cron = CronService(cron_store_path)
 
     if logs:
+        log_path = configure_runtime_file_logging("agent", debug=True)
         logger.enable("forensic_claw")
+        console.print(f"[dim]Runtime log: {log_path}[/dim]")
     else:
         logger.disable("forensic_claw")
 
