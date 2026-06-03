@@ -26,8 +26,14 @@ datas += [
     (str(PROJECT_ROOT / "LICENSE"), "."),
     (str(PROJECT_ROOT / "NOTICE"), "."),
 ]
+# sqlite-vec ships its loadable extension (vec0.dll) as package data. PyInstaller
+# does not collect it automatically, so the frozen build can import sqlite_vec but
+# fails at sqlite_vec.load() with "module not found" and semantic search silently
+# falls back to keyword-only. Bundle the extension so vector search works in the exe.
+datas += collect_data_files("sqlite_vec")
 
 hiddenimports = collect_submodules("forensic_claw")
+hiddenimports += ["sqlite_vec"]
 
 a = Analysis(
     [str(PROJECT_ROOT / "forensic_claw" / "__main__.py")],
