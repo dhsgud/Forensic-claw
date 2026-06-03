@@ -68,6 +68,10 @@ class AgentDefaults(Base):
     response_language: str = "ko"
     enforce_response_language: bool = True
     reset_session_after_answer: bool = False
+    # When a session is under sustained context pressure (compressed several
+    # times) and a new question is unrelated to the recent conversation, start a
+    # fresh session automatically so the new topic gets the full context budget.
+    auto_session_fork: bool = True
 
 
 class AgentsConfig(Base):

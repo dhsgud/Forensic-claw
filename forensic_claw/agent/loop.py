@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
 from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
@@ -17,6 +18,7 @@ from forensic_claw.agent.context import ContextBuilder
 from forensic_claw.agent.memory import MemoryConsolidator
 from forensic_claw.agent.skills import BUILTIN_SKILLS_DIR
 from forensic_claw.agent.subagent import SubagentManager
+from forensic_claw.agent.tools.acquire_hives import AcquireRegistryHivesTool
 from forensic_claw.agent.tools.cron import CronTool
 from forensic_claw.agent.tools.filesystem import (
     EditFileTool,
@@ -73,6 +75,11 @@ class AgentLoop:
     _MODEL_SEARCH_HITS = 8
     # Most recent tool-call groups always kept verbatim when fitting to budget.
     _MIN_RECENT_GROUPS = 2
+    # Auto session fork: only consider forking once a session has been compressed
+    # this many times, and only when the new topic is clearly unrelated.
+    _FORK_MIN_CONSOLIDATIONS = 2
+    _FORK_SIMILARITY_THRESHOLD = 0.35  # cosine; below this → unrelated
+    _FORK_LEXICAL_THRESHOLD = 0.08  # Jaccard fallback; below this → unrelated
     # Reserve on top of completion tokens for tokenizer drift when budgeting.
     _BUDGET_SAFETY_BUFFER = 1024
     _AUTO_BACKGROUND_LOG_PATTERNS = (
@@ -166,6 +173,7 @@ class AgentLoop:
         response_language: str = "ko",
         enforce_response_language: bool = True,
         reset_session_after_answer: bool = False,
+        auto_session_fork: bool = True,
     ):
         from forensic_claw.config.schema import ExecToolConfig, KnowledgeConfig, WebSearchConfig
 
@@ -192,6 +200,7 @@ class AgentLoop:
         self.response_language = response_language
         self.enforce_response_language = enforce_response_language
         self.reset_session_after_answer = reset_session_after_answer
+        self.auto_session_fork = auto_session_fork
         self.model_settings = None
 
         self.context = ContextBuilder(
@@ -271,6 +280,10 @@ class AgentLoop:
             ))
         self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        if sys.platform == "win32":
+            # Forensic acquisition of locked HKLM hives needs admin + 'reg save';
+            # the tool requests a UAC prompt on demand. Windows-only.
+            self.tools.register(AcquireRegistryHivesTool(workspace=self.workspace))
         if self.knowledge_service and self.knowledge_service.enabled:
             self.tools.register(
                 KnowledgeIngestTool(
@@ -925,6 +938,94 @@ class AgentLoop:
         )
         return "Auto Chrome History preparation:\n" + self.knowledge_service.result_to_text(result)
 
+    async def _maybe_fork_unrelated_session(
+        self,
+        session: Any,
+        question: str,
+        *,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> bool:
+        """Start a fresh session when an unrelated topic arrives under context pressure.
+
+        When a session has been compressed several times and the new question is
+        unrelated to the recent conversation, archive what remains into memory and
+        clear the session so the new topic gets the full context window instead of
+        repeatedly paying to compress stale, irrelevant history.
+        """
+        if not self.auto_session_fork:
+            return False
+        if getattr(session, "consolidation_count", 0) < self._FORK_MIN_CONSOLIDATIONS:
+            return False
+        recent = self._recent_user_text(session)
+        if not recent or not question.strip():
+            return False
+        if await self._topics_related(question, recent):
+            return False
+
+        try:
+            chunk = session.messages[session.last_consolidated:]
+            if chunk:
+                await self.memory_consolidator.consolidate_messages(chunk)
+        except Exception as exc:
+            logger.debug("Pre-fork archive failed for {}: {}", session.key, exc)
+
+        session.clear()
+        self.sessions.save(session)
+        logger.info("Auto-forked session {} for an unrelated new topic", session.key)
+        if on_progress:
+            await on_progress(
+                "이전 대화와 무관한 새 주제로 판단되어 새 세션에서 이어갑니다. "
+                "(이전 맥락은 메모리에 보관되어 필요하면 다시 불러옵니다.)"
+            )
+        return True
+
+    @staticmethod
+    def _recent_user_text(session: Any, max_msgs: int = 3) -> str:
+        """Concatenate the most recent user turns to represent the current topic."""
+        texts: list[str] = []
+        for message in reversed(getattr(session, "messages", []) or []):
+            if message.get("role") == "user" and isinstance(message.get("content"), str):
+                texts.append(message["content"])
+                if len(texts) >= max_msgs:
+                    break
+        return " ".join(reversed(texts)).strip()
+
+    async def _topics_related(self, question: str, recent: str) -> bool:
+        """Whether *question* relates to *recent* context. Conservative: True if unsure."""
+        embedder = getattr(getattr(self, "knowledge_service", None), "embedder", None)
+        if embedder is not None and getattr(embedder, "ready", False):
+            try:
+                vectors = await asyncio.to_thread(
+                    lambda: (embedder.embed_one(question), embedder.embed_one(recent))
+                )
+                v1, v2 = vectors
+                if v1 and v2:
+                    return self._cosine(v1, v2) >= self._FORK_SIMILARITY_THRESHOLD
+            except Exception as exc:
+                logger.debug("Relatedness embedding failed: {}", exc)
+        return self._lexical_overlap(question, recent) >= self._FORK_LEXICAL_THRESHOLD
+
+    @staticmethod
+    def _cosine(a: list[float], b: list[float]) -> float:
+        if not a or not b or len(a) != len(b):
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(y * y for y in b) ** 0.5
+        if na == 0 or nb == 0:
+            return 0.0
+        return dot / (na * nb)
+
+    @staticmethod
+    def _lexical_overlap(a: str, b: str) -> float:
+        def tokens(text: str) -> set[str]:
+            return {t for t in re.findall(r"\w+", text.lower()) if len(t) > 1}
+
+        ta, tb = tokens(a), tokens(b)
+        if not ta or not tb:
+            return 0.0
+        return len(ta & tb) / len(ta | tb)
+
     async def _process_message(
         self,
         msg: InboundMessage,
@@ -1047,6 +1148,7 @@ class AgentLoop:
                 metadata={**(msg.metadata or {}), "render_as": "text"},
             )
 
+        await self._maybe_fork_unrelated_session(session, msg.content, on_progress=on_progress)
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         self._set_tool_context(
@@ -1408,9 +1510,12 @@ class AgentLoop:
                 if node_id and node_id not in node_ids:
                     nodes.append({"id": node_id, "label": node_id, "kind": "Node", "group": "Node", "metadata": {}})
                     node_ids.add(node_id)
+        query = str(payload.get("query") or "").strip()
         return {
-            "title": "Evidence Relationship Graph",
-            "query": str(payload.get("query") or ""),
+            # Title each graph by the search that produced it so multiple graphs
+            # in one answer are distinguishable instead of all reading the same.
+            "title": f"{query} — 관계 그래프" if query else "Evidence Relationship Graph",
+            "query": query,
             "source": str(payload.get("backend") or "knowledge_search"),
             "nodes": nodes[:80],
             "edges": edges[:160],

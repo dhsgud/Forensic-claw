@@ -609,6 +609,7 @@ def gateway(
         response_language=config.agents.defaults.response_language,
         enforce_response_language=config.agents.defaults.enforce_response_language,
         reset_session_after_answer=config.agents.defaults.reset_session_after_answer,
+        auto_session_fork=config.agents.defaults.auto_session_fork,
     )
     model_settings = RuntimeModelSettings(config, config_path=get_config_path())
     model_settings.add_apply_callback(agent.apply_model_settings)
@@ -846,6 +847,7 @@ def agent(
         response_language=config.agents.defaults.response_language,
         enforce_response_language=config.agents.defaults.enforce_response_language,
         reset_session_after_answer=config.agents.defaults.reset_session_after_answer,
+        auto_session_fork=config.agents.defaults.auto_session_fork,
     )
     model_settings = RuntimeModelSettings(config, config_path=get_config_path())
     model_settings.add_apply_callback(agent_loop.apply_model_settings)

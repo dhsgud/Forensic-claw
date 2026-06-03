@@ -38,7 +38,7 @@ def test_agent_loop_collects_graph_views_from_knowledge_search_tool_results() ->
 
     assert views == [
         {
-            "title": "Evidence Relationship Graph",
+            "title": "powershell 10.0.0.5 — 관계 그래프",
             "query": "powershell 10.0.0.5",
             "source": "sqlite",
             "nodes": [

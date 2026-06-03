@@ -333,6 +333,7 @@ class MemoryConsolidator:
                 )
                 return
 
+            compressed_this_call = False
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
                     return
@@ -363,6 +364,11 @@ class MemoryConsolidator:
                 if not await self.consolidate_messages(chunk):
                     return
                 session.last_consolidated = end_idx
+                if not compressed_this_call:
+                    # Count one compression event per invocation so the agent can
+                    # detect sessions under sustained context pressure.
+                    session.consolidation_count += 1
+                    compressed_this_call = True
                 self.sessions.save(session)
 
                 estimated, source = self.estimate_session_prompt_tokens(session)

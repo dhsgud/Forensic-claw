@@ -811,8 +811,18 @@ function attachGraphActions(node, graphViews) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "ghost-button graph-open-button";
-    button.textContent = index === 0 ? "그래프로 확인하기" : `그래프 ${index + 1}`;
-    button.title = `${view.nodes.length} nodes, ${view.edges.length} edges`;
+    // Label each button by its topic (the search query) so the user can tell
+    // graphs apart at a glance instead of seeing "그래프 / 그래프 2 / 그래프 3".
+    const topic = String(view.query || view.title || "").trim();
+    const short = topic.length > 22 ? `${topic.slice(0, 21)}…` : topic;
+    button.textContent = short
+      ? `📊 ${short}`
+      : index === 0
+        ? "그래프로 확인하기"
+        : `그래프 ${index + 1}`;
+    button.title = topic
+      ? `${topic} · ${view.nodes.length} nodes, ${view.edges.length} edges`
+      : `${view.nodes.length} nodes, ${view.edges.length} edges`;
     button.addEventListener("click", () => openGraphPanel(view));
     actions.appendChild(button);
   }
