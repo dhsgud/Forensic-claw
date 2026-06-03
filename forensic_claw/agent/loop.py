@@ -41,7 +41,11 @@ from forensic_claw.command import CommandContext, CommandRouter, register_builti
 from forensic_claw.knowledge import KnowledgeService
 from forensic_claw.providers.base import LLMProvider
 from forensic_claw.session.manager import Session, SessionManager
-from forensic_claw.utils.helpers import extract_message_thinking_text, extract_think
+from forensic_claw.utils.helpers import (
+    estimate_prompt_tokens,
+    extract_message_thinking_text,
+    extract_think,
+)
 
 if TYPE_CHECKING:
     from forensic_claw.config.schema import (
@@ -66,6 +70,11 @@ class AgentLoop:
     """
 
     _TOOL_RESULT_MAX_CHARS = 16_000
+    _MODEL_SEARCH_HITS = 8
+    # Most recent tool-call groups always kept verbatim when fitting to budget.
+    _MIN_RECENT_GROUPS = 2
+    # Reserve on top of completion tokens for tokenizer drift when budgeting.
+    _BUDGET_SAFETY_BUFFER = 1024
     _AUTO_BACKGROUND_LOG_PATTERNS = (
         "시스템 로그",
         "이벤트 로그",
@@ -554,9 +563,10 @@ class AgentLoop:
                 not self.enforce_response_language or channel == "webui"
             )
 
+            outgoing = self._provider_messages(messages, tool_defs)
             if use_stream:
                 response = await self.provider.chat_stream_with_retry(
-                    messages=messages,
+                    messages=outgoing,
                     tools=tool_defs,
                     model=self.model,
                     on_content_delta=_filtered_stream,
@@ -564,7 +574,7 @@ class AgentLoop:
                 )
             else:
                 response = await self.provider.chat_with_retry(
-                    messages=messages,
+                    messages=outgoing,
                     tools=tool_defs,
                     model=self.model,
                 )
@@ -698,10 +708,30 @@ class AgentLoop:
 
         return final_content, tools_used, messages
 
+    async def _sync_context_window_from_server(self) -> None:
+        """Adopt the model server's real context window so it drives the budget."""
+        try:
+            detected = await self.provider.detect_context_window(self.model)
+        except Exception as exc:  # detection must never block startup.
+            logger.debug("Context window detection skipped: {}", exc)
+            return
+        if not isinstance(detected, int) or detected <= 0:
+            return
+        if detected != self.context_window_tokens:
+            logger.info(
+                "Context window follows model server: {} tokens (was {})",
+                detected,
+                self.context_window_tokens,
+            )
+        self.context_window_tokens = detected
+        if getattr(self, "memory_consolidator", None) is not None:
+            self.memory_consolidator.context_window_tokens = detected
+
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        await self._sync_context_window_from_server()
         logger.info("Agent loop started")
 
         while self._running:
@@ -1098,6 +1128,131 @@ class AgentLoop:
         """Convert an inline image block into a compact text placeholder."""
         path = (block.get("_meta") or {}).get("path", "")
         return {"type": "text", "text": f"[image: {path}]" if path else "[image]"}
+
+    def _provider_messages(
+        self,
+        messages: list[dict[str, Any]],
+        tool_defs: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return a budget-trimmed copy of ``messages`` to send to the LLM.
+
+        Tool results are compacted so a long tool-call loop (e.g. repeated
+        ``knowledge_search`` calls while analysing browsing history) cannot
+        accumulate past the model context window. The canonical ``messages``
+        list is left untouched so graph-panel extraction and session
+        persistence keep the full payloads.
+        """
+        trimmed: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("role") == "tool" and isinstance(message.get("content"), str):
+                trimmed.append(
+                    {**message, "content": self._compact_tool_content(message.get("name"), message["content"])}
+                )
+            else:
+                trimmed.append(message)
+        return self._fit_to_budget(trimmed, tool_defs)
+
+    def _prompt_token_budget(self) -> int:
+        """Token ceiling for an outgoing prompt, reserving room for the reply."""
+        if self.context_window_tokens <= 0:
+            return 0
+        max_completion = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 0) or 0)
+        return self.context_window_tokens - max_completion - self._BUDGET_SAFETY_BUFFER
+
+    @staticmethod
+    def _group_messages(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        """Group an assistant message with the tool results that answer it.
+
+        Dropping or keeping whole groups preserves assistant/tool-call pairing,
+        which providers require (every tool_call needs its tool result).
+        """
+        groups: list[list[dict[str, Any]]] = []
+        for message in messages:
+            if message.get("role") == "tool" and groups:
+                groups[-1].append(message)
+            else:
+                groups.append([message])
+        return groups
+
+    def _fit_to_budget(
+        self,
+        messages: list[dict[str, Any]],
+        tool_defs: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Compress the prompt until it fits the model context window.
+
+        Guarantees the request stays under the context limit no matter how long
+        the tool-call loop has run, while keeping the message list valid:
+
+        1. Keep system + the latest user message (the question).
+        2. Drop the oldest tool-call groups of the current turn (and all prior
+           history) until the prompt fits, always retaining the most recent
+           groups.
+        3. As a last resort, stub the surviving tool results except the newest.
+        """
+        budget = self._prompt_token_budget()
+        if budget <= 0 or estimate_prompt_tokens(messages, tool_defs) <= budget:
+            return messages
+
+        result = list(messages)
+        head = result[:1] if result and result[0].get("role") == "system" else []
+        last_user = next(
+            (i for i in range(len(result) - 1, -1, -1) if result[i].get("role") == "user"),
+            None,
+        )
+        if last_user is None:
+            return messages  # nothing safe to anchor on; leave as-is
+
+        question = result[last_user]
+        groups = self._group_messages(result[last_user + 1:])
+
+        # Drop oldest groups (prior history already excluded by anchoring on
+        # the last user message) until the prompt fits the budget.
+        while len(groups) > self._MIN_RECENT_GROUPS:
+            candidate = head + [question] + [m for group in groups for m in group]
+            if estimate_prompt_tokens(candidate, tool_defs) <= budget:
+                logger.info("Prompt fit to budget by dropping {} old tool group(s)", len(groups))
+                return candidate
+            groups.pop(0)
+
+        flat = head + [question] + [m for group in groups for m in group]
+        if estimate_prompt_tokens(flat, tool_defs) <= budget:
+            return flat
+
+        # Last resort: stub every tool result except the final message.
+        stub = "[tool result omitted to fit the context window]"
+        for idx in range(1, len(flat) - 1):
+            message = flat[idx]
+            if message.get("role") == "tool" and isinstance(message.get("content"), str):
+                flat[idx] = {**message, "content": stub}
+        if estimate_prompt_tokens(flat, tool_defs) > budget:
+            logger.warning(
+                "Prompt still over budget after compression: ~{} tokens > {} budget",
+                estimate_prompt_tokens(flat, tool_defs),
+                budget,
+            )
+        return flat
+
+    def _compact_tool_content(self, name: str | None, content: str) -> str:
+        """Shrink a tool result for the LLM prompt without altering the stored copy."""
+        if name == "knowledge_search":
+            try:
+                payload = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                payload = None
+            if isinstance(payload, dict):
+                # graphView/graph drive the WebUI graph panel (read from the
+                # canonical messages), not the model's answer — drop them here
+                # so repeated searches stay within the context budget.
+                payload.pop("graphView", None)
+                payload.pop("graph", None)
+                hits = payload.get("hits")
+                if isinstance(hits, list):
+                    payload["hits"] = hits[: self._MODEL_SEARCH_HITS]
+                content = json.dumps(payload, ensure_ascii=False)
+        if len(content) > self._TOOL_RESULT_MAX_CHARS:
+            content = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+        return content
 
     def _sanitize_persisted_blocks(
         self,

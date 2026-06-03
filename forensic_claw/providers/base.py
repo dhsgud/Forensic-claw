@@ -379,6 +379,15 @@ class LLMProvider(ABC):
 
         return await self._safe_chat(**kw)
 
+    async def detect_context_window(self, model: str | None = None) -> int | None:
+        """Return the model server's context window in tokens, if discoverable.
+
+        Providers backed by a self-hosted server can override this to report the
+        server's real context size so the agent follows the server instead of a
+        static config value. Returns ``None`` when the size cannot be determined.
+        """
+        return None
+
     @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""

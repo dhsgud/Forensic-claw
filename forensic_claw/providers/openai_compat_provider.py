@@ -641,3 +641,64 @@ class OpenAICompatProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self.default_model
+
+    def _auth_headers(self) -> dict[str, str]:
+        headers = dict(self.extra_headers)
+        if self.api_key and self.api_key != "no-key":
+            headers.setdefault("Authorization", f"Bearer {self.api_key}")
+        return headers
+
+    @staticmethod
+    def _parse_context_window(payload: Any, model: str | None) -> int | None:
+        """Read a context size from an OpenAI-compatible /models response.
+
+        Handles vLLM (``max_model_len``) and llama.cpp (``meta.n_ctx``).
+        """
+        entries = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            return None
+        chosen: dict[str, Any] | None = None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if model and entry.get("id") == model:
+                chosen = entry
+                break
+            chosen = chosen or entry
+        if not isinstance(chosen, dict):
+            return None
+        for key in ("max_model_len", "context_length", "max_context_length"):
+            value = chosen.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+        meta = chosen.get("meta")
+        if isinstance(meta, dict) and isinstance(meta.get("n_ctx"), int) and meta["n_ctx"] > 0:
+            return meta["n_ctx"]
+        return None
+
+    async def detect_context_window(self, model: str | None = None) -> int | None:
+        """Query the model server for its real context window in tokens."""
+        import httpx
+        from loguru import logger
+
+        base = str(self._client.base_url).rstrip("/")
+        model = model or self.default_model
+        headers = self._auth_headers()
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(f"{base}/models", headers=headers)
+                if resp.status_code == 200:
+                    ctx = self._parse_context_window(resp.json(), model)
+                    if ctx:
+                        return ctx
+                # llama.cpp native props fallback (server exposes /props, not /v1/props).
+                root = base[:-3] if base.endswith("/v1") else base
+                resp = await client.get(f"{root}/props", headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    n_ctx = (data.get("default_generation_settings") or {}).get("n_ctx") or data.get("n_ctx")
+                    if isinstance(n_ctx, int) and n_ctx > 0:
+                        return n_ctx
+        except Exception as exc:  # network/parse issues are non-fatal — fall back to config.
+            logger.debug("Context window detection failed: {}", exc)
+        return None
