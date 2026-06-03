@@ -9,10 +9,6 @@ Copyright (C) 2025-2026 Forensic-Claw contributors
 Source code:
 https://github.com/dhsgud/Forensic-claw
 
-Forensic-Claw includes optional integration code and generated infrastructure
-for HelixDB. HelixDB is a third-party project licensed under AGPL-3.0:
-https://github.com/HelixDB/helix-db
-
 See NOTICE for project and third-party notices.
 
 The full AGPL-3.0 license text follows unchanged.

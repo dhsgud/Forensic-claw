@@ -32,7 +32,6 @@ from rich.table import Table
 from rich.text import Text
 
 from forensic_claw import __logo__, __version__
-from forensic_claw.cli.infra import infra_app
 from forensic_claw.cli.stream import StreamRenderer, ThinkingSpinner
 from forensic_claw.config.paths import get_workspace_path, is_default_workspace
 from forensic_claw.config.schema import Config
@@ -1238,7 +1237,6 @@ def status():
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
-app.add_typer(infra_app, name="infra")
 
 
 _LOGIN_HANDLERS: dict[str, callable] = {}

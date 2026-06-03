@@ -20,8 +20,9 @@ from urllib.parse import urlparse
 import chardet
 from loguru import logger
 
-from forensic_claw.knowledge.helix_backend import HelixKnowledgeBackend
-from forensic_claw.knowledge.store import DocumentRecord, KnowledgeStore
+from forensic_claw.knowledge.base import ChunkInput, DocumentRecord
+from forensic_claw.knowledge.embeddings import create_embedder
+from forensic_claw.knowledge.factory import create_backend
 
 _DEFAULT_PATTERNS = (
     "*.log",
@@ -72,8 +73,9 @@ class KnowledgeIngestResult:
     chunks: int = 0
     entities: int = 0
     relationships: int = 0
+    embedded_chunks: int = 0
     errors: list[str] = field(default_factory=list)
-    helix: dict[str, Any] = field(default_factory=dict)
+    vector: dict[str, Any] = field(default_factory=dict)
 
 
 class KnowledgeService:
@@ -83,45 +85,81 @@ class KnowledgeService:
         self.workspace = workspace
         self.config = config
         self.enabled = bool(getattr(config, "enabled", True))
-        self.store = KnowledgeStore(workspace, getattr(config, "store_dir", "knowledge"))
-        self.helix = HelixKnowledgeBackend(getattr(config, "helix", None))
+        self.backend = create_backend(config, workspace)
+        self.embedder = create_embedder(config)
         logger.debug(
-            "KnowledgeService initialized: workspace={} enabled={} backend={} helixEnabled={}",
+            "KnowledgeService initialized: workspace={} enabled={} backend={} vectorReady={}",
             workspace,
             self.enabled,
-            self._backend_name,
-            self.helix.enabled,
+            self.backend.name,
+            self.embedder.ready,
+        )
+
+    def set_embedding_endpoint(
+        self,
+        *,
+        api_base: str | None,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        """Point semantic search at the active LLM endpoint when none is set.
+
+        The knowledge ``vector.api_base``/``vector.model`` config wins when
+        present; otherwise the running provider's endpoint is injected so that
+        embeddings reuse the same local server as chat.
+        """
+        if api_base and not self.embedder.api_base:
+            self.embedder.api_base = api_base.strip()
+        if model and not self.embedder.model:
+            self.embedder.model = model.strip()
+        if api_key:
+            self.embedder.api_key = api_key
+        logger.debug(
+            "Knowledge embedding endpoint set: ready={} model={} apiBase={}",
+            self.embedder.ready,
+            self.embedder.model,
+            self.embedder.api_base,
         )
 
     def status(self) -> dict[str, Any]:
         """Return local RAG and graph backend readiness."""
         return {
             "enabled": self.enabled,
-            "backend": self._backend_name,
-            "store": self.store.stats(),
-            "helix": self.helix.status(),
+            "backend": self.backend.name,
+            "store": self.backend.stats(),
+            "vector": self._vector_status(),
         }
 
     def reconfigure(self, config: Any) -> None:
         """Apply updated knowledge settings to future ingest/search operations."""
         self.config = config
         self.enabled = bool(getattr(config, "enabled", True))
-        self.store = KnowledgeStore(self.workspace, getattr(config, "store_dir", "knowledge"))
-        self.helix.reconfigure(getattr(config, "helix", None))
+        self.backend = create_backend(config, self.workspace)
+        self.embedder = create_embedder(config)
         logger.info(
-            "KnowledgeService reconfigured: enabled={} backend={} helixEnabled={}",
+            "KnowledgeService reconfigured: enabled={} backend={} vectorReady={}",
             self.enabled,
-            self._backend_name,
-            self.helix.enabled,
+            self.backend.name,
+            self.embedder.ready,
         )
 
-    @property
-    def _backend_name(self) -> str:
-        return str(getattr(self.config, "backend", "sqlite") or "sqlite").lower()
-
-    @property
-    def _use_helix(self) -> bool:
-        return self._backend_name == "helix" and self.helix.enabled
+    def _vector_status(self) -> dict[str, Any]:
+        available = getattr(self.backend, "vector_enabled", False)
+        if not self.embedder.enabled:
+            state = "disabled"
+        elif not available:
+            state = "unavailable"
+        elif not self.embedder.ready:
+            state = "not_configured"
+        else:
+            state = "ready"
+        return {
+            "enabled": self.embedder.enabled,
+            "available": bool(available),
+            "configured": self.embedder.ready,
+            "model": self.embedder.model,
+            "state": state,
+        }
 
     def ingest_path(
         self,
@@ -140,7 +178,7 @@ class KnowledgeService:
                 ok=False,
                 ready=False,
                 errors=["Knowledge RAG is disabled in config."],
-                helix=self.helix.status(),
+                vector=self._vector_status(),
             )
 
         target = Path(path).expanduser()
@@ -153,20 +191,21 @@ class KnowledgeService:
                 ok=False,
                 ready=False,
                 errors=[f"Path not found: {target}"],
-                helix=self.helix.status(),
+                vector=self._vector_status(),
             )
 
         result = KnowledgeIngestResult(ok=True, ready=False)
-        helix_totals = {"enabled": self.helix.enabled, "state": "not_synced", "sources": 0, "chunks": 0, "entities": 0, "relationships": 0}
         logger.info(
             "Knowledge ingest started: target={} recursive={} backend={} maxFiles={}",
             target,
             recursive,
-            self._backend_name,
+            self.backend.name,
             max_files,
         )
 
-        for file_path in self._iter_files(target, recursive=recursive, file_globs=file_globs, max_files=max_files):
+        for file_path in self._iter_files(
+            target, recursive=recursive, file_globs=file_globs, max_files=max_files
+        ):
             result.scanned_files += 1
             try:
                 one = self._ingest_file(
@@ -182,23 +221,7 @@ class KnowledgeService:
                 result.chunks += int(one.get("chunks", 0))
                 result.entities += int(one.get("entities", 0))
                 result.relationships += int(one.get("relationships", 0))
-                logger.debug(
-                    "Knowledge file ingested: path={} chunks={} entities={} relationships={} helixState={}",
-                    file_path,
-                    one.get("chunks", 0),
-                    one.get("entities", 0),
-                    one.get("relationships", 0),
-                    (one.get("helix") or {}).get("state"),
-                )
-                helix = one.get("helix") or {}
-                if helix:
-                    helix_totals["state"] = helix.get("state", helix_totals["state"])
-                    helix_totals["sources"] += int(helix.get("sources", 0) or 0)
-                    helix_totals["chunks"] += int(helix.get("chunks", 0) or 0)
-                    helix_totals["entities"] += int(helix.get("entities", 0) or 0)
-                    helix_totals["relationships"] += int(helix.get("relationships", 0) or 0)
-                    if helix.get("error"):
-                        helix_totals["error"] = helix["error"]
+                result.embedded_chunks += int(one.get("embeddedChunks", 0))
             except Exception as exc:
                 logger.exception("Knowledge ingest failed for file: {}", file_path)
                 result.errors.append(f"{file_path}: {exc}")
@@ -206,9 +229,10 @@ class KnowledgeService:
         if not result.scanned_files:
             result.errors.append(f"No ingestible files found under: {target}")
         result.ready = result.ok and result.ingested_files > 0
-        result.helix = helix_totals if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
+        result.vector = self._vector_status()
         logger.info(
-            "Knowledge ingest finished: target={} ready={} scanned={} ingested={} skipped={} chunks={} entities={} relationships={} errors={}",
+            "Knowledge ingest finished: target={} ready={} scanned={} ingested={} skipped={} "
+            "chunks={} entities={} relationships={} embedded={} errors={}",
             target,
             result.ready,
             result.scanned_files,
@@ -217,59 +241,42 @@ class KnowledgeService:
             result.chunks,
             result.entities,
             result.relationships,
+            result.embedded_chunks,
             len(result.errors),
         )
         return result
 
     def search(self, query: str, *, limit: int = 8, include_graph: bool = True) -> dict[str, Any]:
         """Retrieve RAG chunks and graph hints for a question."""
+        query_embedding = self.embedder.embed_one(query) if self.embedder.ready else None
         logger.debug(
-            "Knowledge search started: backend={} queryLength={} limit={} includeGraph={}",
-            self._backend_name,
+            "Knowledge search started: backend={} queryLength={} limit={} includeGraph={} vector={}",
+            self.backend.name,
             len(query),
             limit,
             include_graph,
+            query_embedding is not None,
         )
-        if self._use_helix:
-            helix_data = self.helix.search(query, limit=limit, include_graph=include_graph)
-            helix_state = (helix_data.get("helix") or {}).get("state")
-            if helix_state != "error" or not bool(getattr(self.helix.config, "fallback_to_sqlite", True)):
-                logger.debug(
-                    "Knowledge search completed through HelixDB: state={} hits={}",
-                    helix_state,
-                    len(helix_data.get("hits", [])),
-                )
-                return helix_data
-            logger.warning(
-                "HelixDB search returned error; falling back to SQLite: error={}",
-                (helix_data.get("helix") or {}).get("error"),
-            )
-
-        hits = self.store.search(query, limit=limit)
-        graph = self.store.graph_search(query, limit=limit) if include_graph else []
-        graph_view = self.store.graph_view(query, limit=max(limit * 6, 24)) if include_graph else {"nodes": [], "edges": []}
+        data = self.backend.search(
+            query,
+            query_embedding=query_embedding,
+            limit=limit,
+            include_graph=include_graph,
+        )
         logger.debug(
-            "Knowledge search completed through SQLite: hits={} graphItems={} graphNodes={} graphEdges={}",
-            len(hits),
-            len(graph),
-            len(graph_view.get("nodes", [])),
-            len(graph_view.get("edges", [])),
+            "Knowledge search completed: hits={} graphItems={} graphNodes={} graphEdges={}",
+            len(data.get("hits", [])),
+            len(data.get("graph", [])),
+            len(data.get("graphView", {}).get("nodes", [])),
+            len(data.get("graphView", {}).get("edges", [])),
         )
         return {
             "query": query,
-            "backend": "sqlite",
-            "hits": [
-                {
-                    "sourcePath": hit.source_path,
-                    "kind": hit.kind,
-                    "rank": hit.rank,
-                    "text": hit.text,
-                    "metadata": hit.metadata,
-                }
-                for hit in hits
-            ],
-            "graph": graph,
-            "graphView": graph_view,
+            "backend": self.backend.name,
+            "vector": query_embedding is not None,
+            "hits": data.get("hits", []),
+            "graph": data.get("graph", []),
+            "graphView": data.get("graphView", {"nodes": [], "edges": []}),
         }
 
     def discover_chrome_history(self, *, max_files: int = 20) -> list[Path]:
@@ -304,11 +311,13 @@ class KnowledgeService:
             return KnowledgeIngestResult(
                 ok=False,
                 ready=False,
-                errors=["No Chrome History database found in local Chrome profile paths or workspace."],
+                errors=[
+                    "No Chrome History database found in local Chrome profile paths or workspace."
+                ],
+                vector=self._vector_status(),
             )
 
         result = KnowledgeIngestResult(ok=True, ready=False)
-        helix_totals = {"enabled": self.helix.enabled, "state": "not_synced", "sources": 0, "chunks": 0, "entities": 0, "relationships": 0}
         logger.info("Chrome History preparation started: files={}", len(paths))
         for path in paths:
             one = self.ingest_path(
@@ -323,19 +332,12 @@ class KnowledgeService:
             result.chunks += one.chunks
             result.entities += one.entities
             result.relationships += one.relationships
+            result.embedded_chunks += one.embedded_chunks
             result.errors.extend(one.errors)
-            if one.helix:
-                helix_totals["state"] = one.helix.get("state", helix_totals["state"])
-                helix_totals["sources"] += int(one.helix.get("sources", 0) or 0)
-                helix_totals["chunks"] += int(one.helix.get("chunks", 0) or 0)
-                helix_totals["entities"] += int(one.helix.get("entities", 0) or 0)
-                helix_totals["relationships"] += int(one.helix.get("relationships", 0) or 0)
-                if one.helix.get("error"):
-                    helix_totals["error"] = one.helix["error"]
 
         result.ready = result.ingested_files > 0
         result.ok = result.ready
-        result.helix = helix_totals if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
+        result.vector = self._vector_status()
         logger.info(
             "Chrome History preparation finished: ready={} scanned={} ingested={} errors={}",
             result.ready,
@@ -353,7 +355,14 @@ class KnowledgeService:
         else:
             user_profile = os.environ.get("USERPROFILE")
             if user_profile:
-                roots.append(Path(user_profile) / "AppData" / "Local" / "Google" / "Chrome" / "User Data")
+                roots.append(
+                    Path(user_profile)
+                    / "AppData"
+                    / "Local"
+                    / "Google"
+                    / "Chrome"
+                    / "User Data"
+                )
         roots.append(self.workspace)
 
         deduped: list[Path] = []
@@ -389,7 +398,9 @@ class KnowledgeService:
         if recursive:
             walker = os.walk(target)
         else:
-            walker = ((str(target), [], [item.name for item in target.iterdir() if item.is_file()]),)
+            walker = (
+                (str(target), [], [item.name for item in target.iterdir() if item.is_file()]),
+            )
 
         for root, dirnames, filenames in walker:
             dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS]
@@ -401,6 +412,22 @@ class KnowledgeService:
                 if max_files and yielded >= max_files:
                     return
 
+    def _embed_chunks(
+        self, chunks: list[tuple[str, dict[str, Any]]]
+    ) -> tuple[list[ChunkInput], int]:
+        """Attach embeddings to chunks; degrade to no-embedding on failure."""
+        if not chunks:
+            return [], 0
+        if not self.embedder.ready:
+            return [(text, metadata, None) for text, metadata in chunks], 0
+        vectors = self.embedder.embed([text for text, _ in chunks])
+        if vectors is None:
+            return [(text, metadata, None) for text, metadata in chunks], 0
+        prepared: list[ChunkInput] = [
+            (text, metadata, vectors[index]) for index, (text, metadata) in enumerate(chunks)
+        ]
+        return prepared, len(vectors)
+
     def _ingest_file(
         self,
         path: Path,
@@ -411,7 +438,9 @@ class KnowledgeService:
         size = path.stat().st_size
         max_size = int(getattr(self.config, "max_file_bytes", 256 * 1024 * 1024))
         if size > max_size:
-            logger.warning("Knowledge file exceeds max size: path={} size={} max={}", path, size, max_size)
+            logger.warning(
+                "Knowledge file exceeds max size: path={} size={} max={}", path, size, max_size
+            )
             raise ValueError(f"file exceeds maxFileBytes ({size} > {max_size})")
 
         logger.debug("Knowledge file ingest started: path={} size={}", path, size)
@@ -428,7 +457,7 @@ class KnowledgeService:
             logger.debug("Knowledge file has no ingestible text chunks: {}", path)
             return None
 
-        document = self.store.replace_document(
+        document = self.backend.replace_document(
             source_path=str(path),
             kind="text_log",
             sha256=self._sha256(path),
@@ -440,7 +469,8 @@ class KnowledgeService:
                 "filename": path.name,
             },
         )
-        chunk_count = self.store.add_chunks(document, text_chunks)
+        embedded_chunks, embedded_count = self._embed_chunks(text_chunks)
+        chunk_count = self.backend.add_chunks(document, embedded_chunks)
         graph_counts = self._index_text_graph(
             document,
             (text for text, _metadata in text_chunks),
@@ -450,20 +480,19 @@ class KnowledgeService:
             case_name=case_name,
             investigator_name=investigator_name,
         )
-        graph = self.store.graph_for_document(document.id)
-        helix = self._sync_helix(document, graph) if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
         logger.debug(
-            "Text file indexed locally: documentId={} chunks={} entities={} relationships={}",
+            "Text file indexed locally: documentId={} chunks={} embedded={} entities={} relationships={}",
             document.id,
             chunk_count,
+            embedded_count,
             graph_counts["entities"],
             graph_counts["relationships"],
         )
         return {
             "chunks": chunk_count,
+            "embeddedChunks": embedded_count,
             "entities": graph_counts["entities"],
             "relationships": graph_counts["relationships"],
-            "helix": helix,
         }
 
     def _text_chunks(self, path: Path) -> Iterable[tuple[str, dict[str, Any]]]:
@@ -522,7 +551,11 @@ class KnowledgeService:
         return controls <= max(2, len(text) // 100)
 
     def _is_chrome_history(self, path: Path) -> bool:
-        if path.name.lower() not in {"history", "history.sqlite"} and path.suffix.lower() not in {".sqlite", ".sqlite3", ".db"}:
+        if path.name.lower() not in {"history", "history.sqlite"} and path.suffix.lower() not in {
+            ".sqlite",
+            ".sqlite3",
+            ".db",
+        }:
             return False
         temp = self._copy_for_sqlite(path)
         conn: sqlite3.Connection | None = None
@@ -579,7 +612,7 @@ class KnowledgeService:
                 conn.close()
             temp.unlink(missing_ok=True)
 
-        document = self.store.replace_document(
+        document = self.backend.replace_document(
             source_path=str(path),
             kind="chrome_history",
             sha256=self._sha256(path),
@@ -592,7 +625,7 @@ class KnowledgeService:
                 "rows": len(rows),
             },
         )
-        chunks = []
+        chunks: list[tuple[str, dict[str, Any]]] = []
         for index, row in enumerate(rows):
             latest = self._chrome_time(row.get("latest_visit_time") or row.get("last_visit_time"))
             text = "\n".join(
@@ -615,43 +648,35 @@ class KnowledgeService:
                 )
             )
 
-        chunk_count = self.store.add_chunks(document, chunks)
+        embedded_chunks, embedded_count = self._embed_chunks(chunks)
+        chunk_count = self.backend.add_chunks(document, embedded_chunks)
         graph_counts = self._index_chrome_graph(document, rows)
         self._add_case_graph(
             document,
             case_name=case_name,
             investigator_name=investigator_name,
         )
-        graph = self.store.graph_for_document(document.id)
-        helix = self._sync_helix(document, graph) if self._use_helix else {"enabled": self.helix.enabled, "state": "disabled"}
         logger.info(
-            "Chrome History ingest finished: documentId={} rows={} chunks={} entities={} relationships={}",
+            "Chrome History ingest finished: documentId={} rows={} chunks={} embedded={} "
+            "entities={} relationships={}",
             document.id,
             len(rows),
             chunk_count,
+            embedded_count,
             graph_counts["entities"],
             graph_counts["relationships"],
         )
         return {
             "chunks": chunk_count,
+            "embeddedChunks": embedded_count,
             "entities": graph_counts["entities"],
             "relationships": graph_counts["relationships"],
-            "helix": helix,
         }
 
-    def _sync_helix(self, document: DocumentRecord, graph: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-        chunks = self.store.chunks_for_document(document.id)
-        logger.debug(
-            "Preparing HelixDB sync from SQLite staging: documentId={} chunks={} entities={} relationships={}",
-            document.id,
-            len(chunks),
-            len(graph.get("entities", [])),
-            len(graph.get("relationships", [])),
-        )
-        return self.helix.sync_document(document=document, chunks=chunks, graph=graph)
-
     def _copy_for_sqlite(self, path: Path) -> Path:
-        temp_dir = self.store.root / "tmp"
+        temp_dir = self.backend.root / "tmp" if hasattr(self.backend, "root") else None
+        if temp_dir is None:
+            temp_dir = self.workspace / "knowledge" / "tmp"
         temp_dir.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(suffix=path.suffix or ".sqlite", dir=temp_dir)
         os.close(fd)
@@ -684,22 +709,24 @@ class KnowledgeService:
         case_name: str | None,
         investigator_name: str | None,
     ) -> None:
-        source_id = self.store.upsert_entity(
+        source_id = self.backend.upsert_entity(
             kind="Source",
             value=document.source_path,
             metadata={"kind": document.kind, **document.metadata},
         )
         if case_name:
-            case_id = self.store.upsert_entity(kind="Case", value=case_name)
-            self.store.upsert_relationship(
+            case_id = self.backend.upsert_entity(kind="Case", value=case_name)
+            self.backend.upsert_relationship(
                 source_id=case_id,
                 target_id=source_id,
                 rel_type="HAS_SOURCE",
                 document_id=document.id,
             )
         if investigator_name:
-            investigator_id = self.store.upsert_entity(kind="Investigator", value=investigator_name)
-            self.store.upsert_relationship(
+            investigator_id = self.backend.upsert_entity(
+                kind="Investigator", value=investigator_name
+            )
+            self.backend.upsert_relationship(
                 source_id=investigator_id,
                 target_id=source_id,
                 rel_type="INGESTED",
@@ -707,7 +734,7 @@ class KnowledgeService:
             )
 
     def _index_text_graph(self, document: DocumentRecord, chunks: Iterable[str]) -> dict[str, int]:
-        source_id = self.store.upsert_entity(
+        source_id = self.backend.upsert_entity(
             kind="Source",
             value=document.source_path,
             metadata={"kind": document.kind, **document.metadata},
@@ -721,8 +748,8 @@ class KnowledgeService:
                 if key in seen:
                     continue
                 seen.add(key)
-                target_id = self.store.upsert_entity(kind=kind, value=value)
-                self.store.upsert_relationship(
+                target_id = self.backend.upsert_entity(kind=kind, value=value)
+                self.backend.upsert_relationship(
                     source_id=source_id,
                     target_id=target_id,
                     rel_type="MENTIONS",
@@ -732,8 +759,10 @@ class KnowledgeService:
                 rel_count += 1
         return {"entities": entity_count, "relationships": rel_count}
 
-    def _index_chrome_graph(self, document: DocumentRecord, rows: list[dict[str, Any]]) -> dict[str, int]:
-        source_id = self.store.upsert_entity(
+    def _index_chrome_graph(
+        self, document: DocumentRecord, rows: list[dict[str, Any]]
+    ) -> dict[str, int]:
+        source_id = self.backend.upsert_entity(
             kind="Source",
             value=document.source_path,
             metadata={"kind": document.kind, **document.metadata},
@@ -744,16 +773,18 @@ class KnowledgeService:
             url = str(row.get("url") or "").strip()
             if not url:
                 continue
-            url_id = self.store.upsert_entity(
+            url_id = self.backend.upsert_entity(
                 kind="URL",
                 value=url,
                 metadata={
                     "title": row.get("title") or "",
                     "visitCount": row.get("visit_count") or 0,
-                    "latestVisitUtc": self._chrome_time(row.get("latest_visit_time") or row.get("last_visit_time")),
+                    "latestVisitUtc": self._chrome_time(
+                        row.get("latest_visit_time") or row.get("last_visit_time")
+                    ),
                 },
             )
-            self.store.upsert_relationship(
+            self.backend.upsert_relationship(
                 source_id=source_id,
                 target_id=url_id,
                 rel_type="VISITED_URL",
@@ -763,8 +794,8 @@ class KnowledgeService:
             rel_count += 1
             domain = self._domain_from_url(url)
             if domain:
-                domain_id = self.store.upsert_entity(kind="Domain", value=domain)
-                self.store.upsert_relationship(
+                domain_id = self.backend.upsert_entity(kind="Domain", value=domain)
+                self.backend.upsert_relationship(
                     source_id=url_id,
                     target_id=domain_id,
                     rel_type="HAS_DOMAIN",
@@ -806,18 +837,23 @@ class KnowledgeService:
     def result_to_text(result: KnowledgeIngestResult) -> str:
         """Format an ingest result for tool output."""
         if not result.ok:
-            return "Knowledge ingest failed.\n" + "\n".join(f"- {error}" for error in result.errors)
+            return "Knowledge ingest failed.\n" + "\n".join(
+                f"- {error}" for error in result.errors
+            )
         lines = [
-            "Knowledge ingest ready." if result.ready else "Knowledge ingest finished with no indexed files.",
+            "Knowledge ingest ready."
+            if result.ready
+            else "Knowledge ingest finished with no indexed files.",
             f"- scannedFiles: {result.scanned_files}",
             f"- ingestedFiles: {result.ingested_files}",
             f"- skippedFiles: {result.skipped_files}",
             f"- chunks: {result.chunks}",
+            f"- embeddedChunks: {result.embedded_chunks}",
             f"- graphEntities: {result.entities}",
             f"- graphRelationships: {result.relationships}",
         ]
-        if result.helix:
-            lines.append(f"- helix: {json.dumps(result.helix, ensure_ascii=False)}")
+        if result.vector:
+            lines.append(f"- vector: {json.dumps(result.vector, ensure_ascii=False)}")
         if result.errors:
             lines.append("- errors:")
             lines.extend(f"  - {error}" for error in result.errors[:10])

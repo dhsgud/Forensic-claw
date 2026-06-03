@@ -606,21 +606,22 @@ class WebUIChannel(BaseChannel):
 
     @staticmethod
     def _knowledge_config_args(body: dict[str, Any]) -> dict[str, Any]:
-        helix = body.get("helix") if isinstance(body.get("helix"), dict) else {}
+        vector = body.get("vector") if isinstance(body.get("vector"), dict) else {}
         return {
             "enabled": body.get("enabled"),
             "backend": body.get("backend"),
             "store_dir": body.get("storeDir", body.get("store_dir")),
-            "helix_enabled": body.get("helixEnabled", body.get("helix_enabled", helix.get("enabled"))),
-            "helix_local": body.get("helixLocal", body.get("helix_local", helix.get("local"))),
-            "helix_port": body.get("helixPort", body.get("helix_port", helix.get("port"))),
-            "helix_api_endpoint": body.get(
-                "helixApiEndpoint",
-                body.get("helix_api_endpoint", helix.get("apiEndpoint", helix.get("api_endpoint"))),
+            "vector_enabled": body.get(
+                "vectorEnabled", body.get("vector_enabled", vector.get("enabled"))
             ),
-            "helix_fallback_to_sqlite": body.get(
-                "helixFallbackToSqlite",
-                body.get("helix_fallback_to_sqlite", helix.get("fallbackToSqlite", helix.get("fallback_to_sqlite"))),
+            "vector_model": body.get("vectorModel", body.get("vector_model", vector.get("model"))),
+            "vector_api_base": body.get(
+                "vectorApiBase",
+                body.get("vector_api_base", vector.get("apiBase", vector.get("api_base"))),
+            ),
+            "vector_dimensions": body.get(
+                "vectorDimensions",
+                body.get("vector_dimensions", vector.get("dimensions")),
             ),
         }
 
@@ -663,12 +664,12 @@ class WebUIChannel(BaseChannel):
             self._knowledge_settings.test_connection,
             backend=args["backend"],
             enabled=args["enabled"],
-            helix_enabled=args["helix_enabled"],
-            helix_local=args["helix_local"],
-            helix_port=args["helix_port"],
-            helix_api_endpoint=args["helix_api_endpoint"],
+            vector_enabled=args["vector_enabled"],
+            vector_model=args["vector_model"],
+            vector_api_base=args["vector_api_base"],
+            vector_dimensions=args["vector_dimensions"],
         )
-        connected = result.get("state") in {"connected", "configured", "disabled", "available"}
+        connected = result.get("state") in {"ready", "disabled", "not_configured", "available"}
         return self._json_response({"ok": connected, "result": result})
 
     async def _handle_upload(self, request: web.Request) -> web.Response:

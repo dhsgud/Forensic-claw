@@ -68,8 +68,6 @@ def test_ingest_path_indexes_large_text_log_and_graph_entities_when_log_contains
     search = service.search("powershell 10.0.0.5")
     assert search["hits"]
     assert "powershell.exe" in search["hits"][0]["text"]
-    graph = service.store.graph_search("10.0.0.5")
-    assert graph[0]["kind"] == "IP"
     graph_view = search["graphView"]
     assert any(node["kind"] == "IP" and node["label"] == "10.0.0.5" for node in graph_view["nodes"])
     assert any(edge["label"] == "MENTIONS" for edge in graph_view["edges"])
@@ -88,8 +86,8 @@ def test_ingest_path_extracts_chrome_history_rows_when_file_is_history_database(
     search = service.search("malware example")
     assert search["hits"]
     assert "Chrome History URL" in search["hits"][0]["text"]
-    domains = service.store.graph_search("example.com")
-    assert any(item["kind"] == "Domain" and item["value"] == "example.com" for item in domains)
+    nodes = search["graphView"]["nodes"]
+    assert any(node["kind"] == "Domain" and node["label"] == "example.com" for node in nodes)
 
 
 def test_prepare_chrome_history_discovers_local_profile_without_explicit_path(tmp_path, monkeypatch):

@@ -11,26 +11,3 @@ version 3.0 only (AGPL-3.0-only). See LICENSE for the full license text.
 
 Source code:
 https://github.com/dhsgud/Forensic-claw
-
-
-Third-Party Notices
--------------------
-
-HelixDB
-
-Project:
-https://github.com/HelixDB/helix-db
-
-License:
-GNU Affero General Public License version 3.0 (AGPL-3.0)
-
-Use in Forensic-Claw:
-Forensic-Claw includes optional integration code, HelixQL query definitions,
-and generated infrastructure files for using HelixDB as a graph-vector
-knowledge backend.
-
-This repository does not vendor HelixDB source code or binaries. Users install,
-build, and run HelixDB separately through the Helix CLI and Docker workflow.
-If you distribute HelixDB, modified HelixDB, or artifacts derived from HelixDB,
-preserve HelixDB copyright, license, and source notices and provide source as
-required by the AGPL-3.0 license.

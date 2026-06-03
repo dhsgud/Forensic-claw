@@ -170,7 +170,6 @@ try {
     [void] $builder.AppendLine('    <DirectoryRef Id="ApplicationProgramsFolder">')
     [void] $builder.AppendLine('      <Component Id="StartMenuShortcutComponent" Guid="*">')
     [void] $builder.AppendLine('        <Shortcut Id="StartWebUIShortcut" Name="Forensic-Claw WebUI" Description="Open Forensic-Claw Local WebUI" Target="[INSTALLFOLDER]Forensic-Claw.exe" Arguments="gateway --open-browser" WorkingDirectory="INSTALLFOLDER" />')
-    [void] $builder.AppendLine('        <Shortcut Id="InfraManagerShortcut" Name="Forensic-Claw Infra Manager" Description="Prepare HelixDB graph-vector storage infrastructure" Target="[INSTALLFOLDER]Forensic-Claw.exe" Arguments="infra init" WorkingDirectory="INSTALLFOLDER" />')
     [void] $builder.AppendLine('        <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />')
     [void] $builder.AppendLine('        <RegistryValue Root="HKCU" Key="Software\Forensic-Claw" Name="installed" Type="integer" Value="1" KeyPath="yes" />')
     [void] $builder.AppendLine('      </Component>')

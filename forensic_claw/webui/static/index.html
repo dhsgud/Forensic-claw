@@ -40,24 +40,23 @@
             <span>Knowledge Backend</span>
             <select id="setup-knowledge-backend">
               <option value="sqlite">Local RAG + Graph Index</option>
-              <option value="helix">HelixDB</option>
             </select>
           </label>
-          <label class="field check-field setup-wide setup-helix-field" hidden>
-            <input id="setup-helix-enabled" type="checkbox">
-            <span>Enable HelixDB</span>
+          <label class="field check-field setup-wide setup-vector-field">
+            <input id="setup-vector-enabled" type="checkbox" checked>
+            <span>Enable semantic (vector) search</span>
           </label>
-          <label class="field setup-helix-field" hidden>
-            <span>Helix Port</span>
-            <input id="setup-helix-port" type="number" min="1" max="65535" placeholder="6969">
+          <label class="field setup-wide setup-vector-field">
+            <span>Embedding Model</span>
+            <input id="setup-vector-model" type="text" placeholder="nomic-embed-text">
           </label>
-          <label class="field setup-wide setup-helix-field" hidden>
-            <span>Helix API Endpoint</span>
-            <input id="setup-helix-api-endpoint" type="text" placeholder="http://127.0.0.1:6969">
+          <label class="field setup-wide setup-vector-field">
+            <span>Embedding API Base</span>
+            <input id="setup-vector-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
           </label>
-          <label class="field check-field setup-wide setup-helix-field" hidden>
-            <input id="setup-helix-fallback" type="checkbox" checked>
-            <span>Fallback to SQLite if Helix query fails</span>
+          <label class="field setup-vector-field">
+            <span>Embedding Dimensions</span>
+            <input id="setup-vector-dimensions" type="number" min="0" max="8192" placeholder="0">
           </label>
         </div>
 
@@ -131,28 +130,27 @@
             <span>Backend</span>
             <select id="knowledge-backend">
               <option value="sqlite">Local RAG + Graph Index</option>
-              <option value="helix">HelixDB</option>
             </select>
           </label>
           <label class="field">
             <span>Store Directory</span>
             <input id="knowledge-store-dir" type="text" placeholder="knowledge">
           </label>
-          <label class="field check-field" hidden>
-            <input id="helix-enabled" type="checkbox">
-            <span>Enable HelixDB</span>
+          <label class="field check-field">
+            <input id="vector-enabled" type="checkbox" checked>
+            <span>Enable semantic (vector) search</span>
           </label>
-          <label class="field" hidden>
-            <span>Helix Port</span>
-            <input id="helix-port" type="number" min="1" max="65535" placeholder="6969">
+          <label class="field">
+            <span>Embedding Model</span>
+            <input id="vector-model" type="text" placeholder="nomic-embed-text">
           </label>
-          <label class="field" hidden>
-            <span>Helix API Endpoint</span>
-            <input id="helix-api-endpoint" type="text" placeholder="http://127.0.0.1:6969">
+          <label class="field">
+            <span>Embedding API Base</span>
+            <input id="vector-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
           </label>
-          <label class="field check-field" hidden>
-            <input id="helix-fallback" type="checkbox" checked>
-            <span>Fallback to SQLite if Helix query fails</span>
+          <label class="field">
+            <span>Embedding Dimensions</span>
+            <input id="vector-dimensions" type="number" min="0" max="8192" placeholder="0">
           </label>
           <div class="button-row">
             <button id="knowledge-test" class="ghost-button" type="button">Test DB</button>

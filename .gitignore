@@ -36,11 +36,6 @@ uv.lock
 *.dd
 /Forensic-claw.pdf
 /tmp_forensic_claw_pdf.txt
-infra/helix-db/
-infra/helix/backups/
-infra/helix/bin/
-infra/helix/.helix/
-infra/helix/target/
 # Keep markdown local-only by default. Only packaged runtime resources are tracked.
 *.md
 !/README.md

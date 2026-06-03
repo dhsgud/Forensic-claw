@@ -9,17 +9,19 @@ def test_webui_exposes_backend_specific_database_test_controls() -> None:
 
     assert 'id="setup-knowledge-backend"' in html
     assert 'id="setup-test-db"' in html
-    assert 'id="setup-helix-enabled"' in html
-    assert 'id="setup-helix-port"' in html
-    assert 'id="setup-helix-api-endpoint"' in html
+    assert 'id="setup-vector-enabled"' in html
+    assert 'id="setup-vector-model"' in html
+    assert 'id="setup-vector-api-base"' in html
     assert 'id="knowledge-test"' in html
     assert "Test DB" in html
 
     assert "Neo4j" not in html
     assert "setup-neo4j" not in html
     assert "neo4j-" not in html
+    assert "HelixDB" not in html
+    assert "setup-helix" not in html
     assert "Local RAG + Graph Index" in html
-    assert "Test ${knowledgeBackendLabel(backend)}" in app
+    assert "Test ${knowledgeBackendLabel()}" in app
     assert "${label} test succeeded" in app
 
 

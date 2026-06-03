@@ -152,7 +152,7 @@ def build_attachment_context(records: list[UploadRecord]) -> str:
                 f"chunks={record.ingest.get('chunks', 0)} "
                 f"entities={record.ingest.get('entities', 0)} "
                 f"relationships={record.ingest.get('relationships', 0)} "
-                f"helix={json.dumps(record.ingest.get('helix') or {}, ensure_ascii=False)}"
+                f"vector={json.dumps(record.ingest.get('vector') or {}, ensure_ascii=False)}"
             )
         if record.vision:
             lines.append(f"   Vision summary: {record.vision.get('summary') or ''}")
@@ -348,8 +348,9 @@ class UploadService:
             "chunks": result.chunks,
             "entities": result.entities,
             "relationships": result.relationships,
+            "embeddedChunks": result.embedded_chunks,
             "errors": list(result.errors),
-            "helix": dict(result.helix or {}),
+            "vector": dict(result.vector or {}),
         }
         record.status = "ready" if result.ready else "stored"
         record.message = (

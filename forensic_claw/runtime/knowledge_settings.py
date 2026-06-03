@@ -1,4 +1,4 @@
-"""Runtime knowledge and HelixDB settings support."""
+"""Runtime knowledge and semantic (vector) settings support."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from typing import Any
 
 from forensic_claw.config.loader import save_config
 from forensic_claw.config.schema import Config
-from forensic_claw.knowledge.helix_backend import HelixKnowledgeBackend
+from forensic_claw.knowledge.embeddings import Embedder
 from forensic_claw.knowledge.service import KnowledgeService
 
 
 class RuntimeKnowledgeSettings:
-    """Own knowledge graph config updates for a running process."""
+    """Own knowledge and semantic-search config updates for a running process."""
 
     def __init__(
         self,
@@ -27,11 +27,8 @@ class RuntimeKnowledgeSettings:
 
     def snapshot(self) -> dict[str, Any]:
         knowledge = self.config.knowledge
-        helix = knowledge.helix
-        status = self.service.status() if self.service else {
-            "store": {},
-            "helix": HelixKnowledgeBackend(helix).status(),
-        }
+        vector = knowledge.vector
+        status = self.service.status() if self.service else {"store": {}, "vector": {}}
         return {
             "enabled": knowledge.enabled,
             "backend": knowledge.backend,
@@ -45,13 +42,12 @@ class RuntimeKnowledgeSettings:
                 "state": "available",
                 "status": status.get("store", {}),
             },
-            "helix": {
-                "enabled": helix.enabled,
-                "local": helix.local,
-                "port": helix.port,
-                "apiEndpoint": helix.api_endpoint,
-                "fallbackToSqlite": helix.fallback_to_sqlite,
-                "status": status.get("helix", {}),
+            "vector": {
+                "enabled": vector.enabled,
+                "model": vector.model,
+                "apiBase": vector.api_base,
+                "dimensions": vector.dimensions,
+                "status": status.get("vector", {}),
             },
         }
 
@@ -61,39 +57,36 @@ class RuntimeKnowledgeSettings:
         enabled: bool | None = None,
         backend: str | None = None,
         store_dir: str | None = None,
-        helix_enabled: bool | None = None,
-        helix_local: bool | None = None,
-        helix_port: int | None = None,
-        helix_api_endpoint: str | None = None,
-        helix_fallback_to_sqlite: bool | None = None,
+        vector_enabled: bool | None = None,
+        vector_model: str | None = None,
+        vector_api_base: str | None = None,
+        vector_dimensions: int | None = None,
     ) -> dict[str, Any]:
-        """Persist knowledge and graph backend settings."""
+        """Persist knowledge and semantic-search settings."""
         updated = self.config.model_copy(deep=True)
         knowledge = updated.knowledge
-        helix = knowledge.helix
+        vector = knowledge.vector
 
         if enabled is not None:
             knowledge.enabled = enabled
         if backend is not None:
             normalized_backend = backend.strip().lower()
-            if normalized_backend not in {"sqlite", "helix"}:
-                raise ValueError("Knowledge backend must be either 'sqlite' or 'helix'.")
+            if normalized_backend != "sqlite":
+                raise ValueError("Knowledge backend must be 'sqlite'.")
             knowledge.backend = normalized_backend
         if store_dir is not None:
             normalized = store_dir.strip()
             if not normalized:
                 raise ValueError("Knowledge store directory must not be empty.")
             knowledge.store_dir = normalized
-        if helix_enabled is not None:
-            helix.enabled = helix_enabled
-        if helix_local is not None:
-            helix.local = helix_local
-        if helix_port is not None:
-            helix.port = int(helix_port)
-        if helix_api_endpoint is not None:
-            helix.api_endpoint = helix_api_endpoint.strip()
-        if helix_fallback_to_sqlite is not None:
-            helix.fallback_to_sqlite = helix_fallback_to_sqlite
+        if vector_enabled is not None:
+            vector.enabled = vector_enabled
+        if vector_model is not None:
+            vector.model = vector_model.strip()
+        if vector_api_base is not None:
+            vector.api_base = vector_api_base.strip()
+        if vector_dimensions is not None:
+            vector.dimensions = max(0, int(vector_dimensions))
 
         self.config.knowledge = knowledge
         save_config(self.config, self.config_path)
@@ -106,30 +99,49 @@ class RuntimeKnowledgeSettings:
         *,
         enabled: bool | None = None,
         backend: str | None = None,
-        helix_enabled: bool | None = None,
-        helix_local: bool | None = None,
-        helix_port: int | None = None,
-        helix_api_endpoint: str | None = None,
+        vector_enabled: bool | None = None,
+        vector_model: str | None = None,
+        vector_api_base: str | None = None,
+        vector_dimensions: int | None = None,
     ) -> dict[str, Any]:
-        """Probe the selected knowledge backend using supplied values without persisting them."""
-        selected_backend = (backend or self.config.knowledge.backend or "sqlite").strip().lower()
-        if selected_backend == "helix":
-            helix = self.config.knowledge.helix.model_copy(deep=True)
-            if helix_enabled is not None:
-                helix.enabled = helix_enabled
-            if helix_local is not None:
-                helix.local = helix_local
-            if helix_port is not None:
-                helix.port = int(helix_port)
-            if helix_api_endpoint is not None:
-                helix.api_endpoint = helix_api_endpoint.strip()
-            return HelixKnowledgeBackend(helix).status()
+        """Probe semantic search using supplied values without persisting them."""
+        vector = self.config.knowledge.vector
+        embedder = Embedder(
+            enabled=vector.enabled if vector_enabled is None else bool(vector_enabled),
+            model=(vector.model if vector_model is None else vector_model).strip(),
+            api_base=(vector.api_base if vector_api_base is None else vector_api_base).strip(),
+            dimensions=vector.dimensions if vector_dimensions is None else int(vector_dimensions),
+            timeout=vector.request_timeout_seconds,
+        )
 
+        if not embedder.enabled:
+            return {"enabled": False, "backend": "sqlite", "state": "disabled", "model": embedder.model}
+        if not embedder.ready:
+            return {
+                "enabled": True,
+                "backend": "sqlite",
+                "state": "not_configured",
+                "model": embedder.model,
+                "apiBase": embedder.api_base,
+            }
+
+        vectors = embedder.embed_one("forensic-claw embedding probe")
+        if vectors is None:
+            return {
+                "enabled": True,
+                "backend": "sqlite",
+                "state": "unavailable",
+                "model": embedder.model,
+                "apiBase": embedder.api_base,
+                "error": "Embedding endpoint did not return a vector.",
+            }
         return {
-            "enabled": self.config.knowledge.enabled if enabled is None else bool(enabled),
+            "enabled": True,
             "backend": "sqlite",
-            "state": "available",
-            "storeDir": self.config.knowledge.store_dir,
+            "state": "ready",
+            "model": embedder.model,
+            "apiBase": embedder.api_base,
+            "dimensions": len(vectors),
         }
 
 

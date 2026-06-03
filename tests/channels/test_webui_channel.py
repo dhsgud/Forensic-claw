@@ -87,13 +87,12 @@ class FakeKnowledgeSettings:
             "maxFileBytes": 268435456,
             "maxChromeRows": 10000,
             "local": {"enabled": True, "state": "available", "status": {}},
-            "helix": {
-                "enabled": None,
-                "local": True,
-                "port": 6969,
-                "apiEndpoint": "",
-                "fallbackToSqlite": True,
-                "status": {"enabled": False, "state": "disabled"},
+            "vector": {
+                "enabled": True,
+                "model": "",
+                "apiBase": "",
+                "dimensions": 0,
+                "status": {"enabled": True, "state": "not_configured"},
             },
         }
 
@@ -108,27 +107,32 @@ class FakeKnowledgeSettings:
             self._snapshot["backend"] = kwargs["backend"]
         if kwargs.get("store_dir") is not None:
             self._snapshot["storeDir"] = kwargs["store_dir"]
-        helix = self._snapshot["helix"]
-        if kwargs.get("helix_enabled") is not None:
-            helix["enabled"] = kwargs["helix_enabled"]
-        if kwargs.get("helix_local") is not None:
-            helix["local"] = kwargs["helix_local"]
-        if kwargs.get("helix_port") is not None:
-            helix["port"] = kwargs["helix_port"]
-        if kwargs.get("helix_api_endpoint") is not None:
-            helix["apiEndpoint"] = kwargs["helix_api_endpoint"]
-        if kwargs.get("helix_fallback_to_sqlite") is not None:
-            helix["fallbackToSqlite"] = kwargs["helix_fallback_to_sqlite"]
-        helix["status"] = {"enabled": helix["enabled"], "state": "configured"}
+        vector = self._snapshot["vector"]
+        if kwargs.get("vector_enabled") is not None:
+            vector["enabled"] = kwargs["vector_enabled"]
+        if kwargs.get("vector_model") is not None:
+            vector["model"] = kwargs["vector_model"]
+        if kwargs.get("vector_api_base") is not None:
+            vector["apiBase"] = kwargs["vector_api_base"]
+        if kwargs.get("vector_dimensions") is not None:
+            vector["dimensions"] = kwargs["vector_dimensions"]
+        configured = bool(vector["model"]) and bool(vector["apiBase"])
+        vector["status"] = {
+            "enabled": vector["enabled"],
+            "state": "ready" if configured else "not_configured",
+        }
         return self.snapshot()
 
     def test_connection(self, **kwargs) -> dict:
         self.tested.append(kwargs)
-        if kwargs.get("backend") == "helix":
+        if kwargs.get("vector_enabled") is False:
+            return {"enabled": False, "backend": "sqlite", "state": "disabled"}
+        if kwargs.get("vector_model") and kwargs.get("vector_api_base"):
             return {
-                "enabled": kwargs.get("helix_enabled"),
-                "state": "configured",
-                "port": kwargs.get("helix_port") or 6969,
+                "enabled": True,
+                "backend": "sqlite",
+                "state": "ready",
+                "model": kwargs.get("vector_model"),
             }
         return {
             "enabled": kwargs.get("enabled"),
@@ -291,11 +295,10 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
                 "enabled": True,
                 "backend": "sqlite",
                 "store_dir": "knowledge-live",
-                "helix_enabled": None,
-                "helix_local": None,
-                "helix_port": None,
-                "helix_api_endpoint": None,
-                "helix_fallback_to_sqlite": None,
+                "vector_enabled": None,
+                "vector_model": None,
+                "vector_api_base": None,
+                "vector_dimensions": None,
             }
         ]
 
@@ -311,10 +314,10 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
             {
                 "enabled": None,
                 "backend": "sqlite",
-                "helix_enabled": None,
-                "helix_local": None,
-                "helix_port": None,
-                "helix_api_endpoint": None,
+                "vector_enabled": None,
+                "vector_model": None,
+                "vector_api_base": None,
+                "vector_dimensions": None,
             }
         ]
     finally:
@@ -322,7 +325,7 @@ async def test_webui_knowledge_config_api_returns_updates_and_tests_runtime_sett
 
 
 @pytest.mark.asyncio
-async def test_webui_knowledge_config_api_updates_and_tests_helix_backend(
+async def test_webui_knowledge_config_api_updates_and_tests_vector_search(
     tmp_path: Path,
 ) -> None:
     bus = MessageBus()
@@ -348,29 +351,34 @@ async def test_webui_knowledge_config_api_updates_and_tests_helix_backend(
             "/api/knowledge-config",
             json={
                 "enabled": True,
-                "backend": "helix",
-                "helixEnabled": True,
-                "helixPort": 6969,
-                "helixApiEndpoint": "",
-                "helixFallbackToSqlite": True,
+                "backend": "sqlite",
+                "vectorEnabled": True,
+                "vectorModel": "nomic-embed-text",
+                "vectorApiBase": "http://127.0.0.1:1234/v1",
+                "vectorDimensions": 768,
             },
         )
         assert response.status == 200
         payload = await response.json()
-        assert payload["knowledgeConfig"]["backend"] == "helix"
-        assert payload["knowledgeConfig"]["helix"]["enabled"] is True
-        assert knowledge_settings.applied[-1]["backend"] == "helix"
-        assert knowledge_settings.applied[-1]["helix_enabled"] is True
+        assert payload["knowledgeConfig"]["backend"] == "sqlite"
+        assert payload["knowledgeConfig"]["vector"]["model"] == "nomic-embed-text"
+        assert payload["knowledgeConfig"]["vector"]["status"]["state"] == "ready"
+        assert knowledge_settings.applied[-1]["vector_model"] == "nomic-embed-text"
+        assert knowledge_settings.applied[-1]["vector_dimensions"] == 768
 
         response = await client.post(
             "/api/knowledge-config/test",
-            json={"backend": "helix", "helixEnabled": True, "helixPort": 6969},
+            json={
+                "vectorEnabled": True,
+                "vectorModel": "nomic-embed-text",
+                "vectorApiBase": "http://127.0.0.1:1234/v1",
+            },
         )
         assert response.status == 200
         payload = await response.json()
         assert payload["ok"] is True
-        assert payload["result"]["state"] == "configured"
-        assert knowledge_settings.tested[-1]["backend"] == "helix"
+        assert payload["result"]["state"] == "ready"
+        assert knowledge_settings.tested[-1]["vector_model"] == "nomic-embed-text"
     finally:
         await client.close()
 

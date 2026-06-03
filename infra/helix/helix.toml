@@ -1,9 +1,0 @@
-[project]
-name = "forensic-claw-knowledge"
-queries = "./db/"
-
-[local.dev]
-port = 6969
-build_mode = "dev"
-bm25 = true
-mcp = false

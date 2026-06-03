@@ -43,11 +43,11 @@ const setupProvider = document.querySelector("#setup-model-provider");
 const setupModelId = document.querySelector("#setup-model-id");
 const setupApiBase = document.querySelector("#setup-model-api-base");
 const setupKnowledgeBackend = document.querySelector("#setup-knowledge-backend");
-const setupHelixEnabled = document.querySelector("#setup-helix-enabled");
-const setupHelixPort = document.querySelector("#setup-helix-port");
-const setupHelixApiEndpoint = document.querySelector("#setup-helix-api-endpoint");
-const setupHelixFallback = document.querySelector("#setup-helix-fallback");
-const setupHelixFields = document.querySelectorAll(".setup-helix-field");
+const setupVectorEnabled = document.querySelector("#setup-vector-enabled");
+const setupVectorModel = document.querySelector("#setup-vector-model");
+const setupVectorApiBase = document.querySelector("#setup-vector-api-base");
+const setupVectorDimensions = document.querySelector("#setup-vector-dimensions");
+const setupVectorFields = document.querySelectorAll(".setup-vector-field");
 const setupTestModel = document.querySelector("#setup-test-model");
 const setupTestDb = document.querySelector("#setup-test-db");
 const setupStart = document.querySelector("#setup-start");
@@ -99,10 +99,10 @@ const knowledgeStatus = document.querySelector("#knowledge-status");
 const knowledgeEnabled = document.querySelector("#knowledge-enabled");
 const knowledgeBackend = document.querySelector("#knowledge-backend");
 const knowledgeStoreDir = document.querySelector("#knowledge-store-dir");
-const helixEnabled = document.querySelector("#helix-enabled");
-const helixPort = document.querySelector("#helix-port");
-const helixApiEndpoint = document.querySelector("#helix-api-endpoint");
-const helixFallback = document.querySelector("#helix-fallback");
+const vectorEnabled = document.querySelector("#vector-enabled");
+const vectorModel = document.querySelector("#vector-model");
+const vectorApiBase = document.querySelector("#vector-api-base");
+const vectorDimensions = document.querySelector("#vector-dimensions");
 const knowledgeTest = document.querySelector("#knowledge-test");
 const knowledgeSave = document.querySelector("#knowledge-save");
 const knowledgeSummary = document.querySelector("#knowledge-summary");
@@ -175,51 +175,34 @@ function setKnowledgeStatus(text, kind = "") {
   knowledgeStatus.classList.toggle("warn", kind === "warn");
 }
 
-function knowledgeBackendLabel(backend) {
-  return backend === "helix" ? "HelixDB" : "Local graph index";
+function knowledgeBackendLabel() {
+  return "Local graph index";
 }
 
 function syncKnowledgeBackendUi() {
-  const backend = knowledgeBackend?.value || state.knowledgeConfig?.backend || "sqlite";
-  const usingHelix = backend === "helix";
-  if (usingHelix && helixEnabled && !helixEnabled.checked) {
-    helixEnabled.checked = true;
-  }
   if (knowledgeTest) {
-    knowledgeTest.textContent = `Test ${knowledgeBackendLabel(backend)}`;
-    knowledgeTest.setAttribute("aria-label", `Test ${knowledgeBackendLabel(backend)} connection`);
+    knowledgeTest.textContent = `Test ${knowledgeBackendLabel()}`;
+    knowledgeTest.setAttribute("aria-label", `Test ${knowledgeBackendLabel()} connection`);
   }
-  if (helixEnabled) helixEnabled.closest(".field")?.toggleAttribute("hidden", !usingHelix);
-  if (helixPort) helixPort.closest(".field")?.toggleAttribute("hidden", !usingHelix);
-  if (helixApiEndpoint) helixApiEndpoint.closest(".field")?.toggleAttribute("hidden", !usingHelix);
-  if (helixFallback) helixFallback.closest(".field")?.toggleAttribute("hidden", !usingHelix);
 }
 
 function syncSetupKnowledgeBackendUi() {
-  const backend = setupKnowledgeBackend?.value || state.knowledgeConfig?.backend || "sqlite";
-  const usingHelix = backend === "helix";
-  if (usingHelix && setupHelixEnabled && !setupHelixEnabled.checked) {
-    setupHelixEnabled.checked = true;
-  }
   if (setupTestDb) {
-    setupTestDb.textContent = `Test ${knowledgeBackendLabel(backend)}`;
-    setupTestDb.setAttribute("aria-label", `Test ${knowledgeBackendLabel(backend)} connection`);
+    setupTestDb.textContent = `Test ${knowledgeBackendLabel()}`;
+    setupTestDb.setAttribute("aria-label", `Test ${knowledgeBackendLabel()} connection`);
   }
-  setupHelixFields.forEach((field) => field.toggleAttribute("hidden", !usingHelix));
 }
 
 function knowledgePayloadFromFields(fields) {
-  const payload = {
+  return {
     enabled: Boolean(fields.knowledgeEnabled?.checked),
     backend: fields.backend?.value || "sqlite",
     storeDir: fields.storeDir?.value.trim() || "knowledge",
-    helixEnabled: Boolean(fields.helixEnabled?.checked),
-    helixLocal: true,
-    helixPort: Number(fields.helixPort?.value || 6969),
-    helixApiEndpoint: fields.helixApiEndpoint?.value.trim() || "",
-    helixFallbackToSqlite: fields.helixFallback?.checked ?? true,
+    vectorEnabled: Boolean(fields.vectorEnabled?.checked),
+    vectorModel: fields.vectorModel?.value.trim() || "",
+    vectorApiBase: fields.vectorApiBase?.value.trim() || "",
+    vectorDimensions: Number(fields.vectorDimensions?.value || 0),
   };
-  return payload;
 }
 
 function currentKnowledgeForm() {
@@ -227,10 +210,10 @@ function currentKnowledgeForm() {
     knowledgeEnabled,
     backend: knowledgeBackend,
     storeDir: knowledgeStoreDir,
-    helixEnabled,
-    helixPort,
-    helixApiEndpoint,
-    helixFallback,
+    vectorEnabled,
+    vectorModel,
+    vectorApiBase,
+    vectorDimensions,
   });
 }
 
@@ -239,10 +222,10 @@ function setupKnowledgeFormPayload() {
     knowledgeEnabled: { checked: true },
     backend: { value: setupKnowledgeBackend?.value || state.knowledgeConfig?.backend || "sqlite" },
     storeDir: { value: state.knowledgeConfig?.storeDir || "knowledge" },
-    helixEnabled: setupHelixEnabled,
-    helixPort: setupHelixPort,
-    helixApiEndpoint: setupHelixApiEndpoint,
-    helixFallback: setupHelixFallback,
+    vectorEnabled: setupVectorEnabled,
+    vectorModel: setupVectorModel,
+    vectorApiBase: setupVectorApiBase,
+    vectorDimensions: setupVectorDimensions,
   });
 }
 
@@ -255,36 +238,33 @@ function renderKnowledgeConfig(config) {
     return;
   }
 
-  const helix = config.helix || {};
-  const helixStatus = helix.status || {};
+  const vector = config.vector || {};
+  const vectorStatus = vector.status || {};
   knowledgeEnabled.checked = Boolean(config.enabled);
   knowledgeBackend.value = config.backend || "sqlite";
   knowledgeStoreDir.value = config.storeDir || "knowledge";
-  if (helixEnabled) helixEnabled.checked = Boolean(helix.enabled);
-  if (helixPort) helixPort.value = helix.port || 6969;
-  if (helixApiEndpoint) helixApiEndpoint.value = helix.apiEndpoint || "";
-  if (helixFallback) helixFallback.checked = helix.fallbackToSqlite ?? true;
+  if (vectorEnabled) vectorEnabled.checked = Boolean(vector.enabled);
+  if (vectorModel) vectorModel.value = vector.model || "";
+  if (vectorApiBase) vectorApiBase.value = vector.apiBase || "";
+  if (vectorDimensions) vectorDimensions.value = vector.dimensions || 0;
 
-  const usingHelix = (config.backend || "sqlite") === "helix";
-  const stateText = usingHelix
-    ? (helixStatus.state || (helix.enabled ? "configured" : "disabled"))
-    : "available";
-  const badgeKind = stateText === "connected" || stateText === "available" ? "success" : stateText === "disabled" ? "" : "warn";
+  const stateText = vectorStatus.state || (vector.enabled ? "not_configured" : "disabled");
+  const badgeKind = stateText === "ready" ? "success" : stateText === "disabled" ? "" : "warn";
   setKnowledgeStatus(stateText, badgeKind);
-  knowledgeSummary.textContent = usingHelix
-    ? `RAG ${config.enabled ? "enabled" : "disabled"} - HelixDB ${stateText} - port ${helix.port || 6969}`
-    : `RAG ${config.enabled ? "enabled" : "disabled"} - local graph index - ${config.storeDir || "knowledge"}`;
+  knowledgeSummary.textContent =
+    `RAG ${config.enabled ? "enabled" : "disabled"} - local graph index` +
+    ` - ${config.storeDir || "knowledge"} - vector ${stateText}`;
   syncKnowledgeBackendUi();
 }
 
 function renderSetupKnowledgeConfig(config) {
   if (!setupKnowledgeBackend) return;
-  const helix = config?.helix || {};
+  const vector = config?.vector || {};
   setupKnowledgeBackend.value = config?.backend || "sqlite";
-  if (setupHelixEnabled) setupHelixEnabled.checked = Boolean(helix.enabled);
-  if (setupHelixPort) setupHelixPort.value = helix.port || 6969;
-  if (setupHelixApiEndpoint) setupHelixApiEndpoint.value = helix.apiEndpoint || "";
-  if (setupHelixFallback) setupHelixFallback.checked = helix.fallbackToSqlite ?? true;
+  if (setupVectorEnabled) setupVectorEnabled.checked = Boolean(vector.enabled);
+  if (setupVectorModel) setupVectorModel.value = vector.model || "";
+  if (setupVectorApiBase) setupVectorApiBase.value = vector.apiBase || "";
+  if (setupVectorDimensions) setupVectorDimensions.value = vector.dimensions || 0;
   syncSetupKnowledgeBackendUi();
 }
 
