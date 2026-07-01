@@ -8,7 +8,7 @@ import uuid
 import webbrowser
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import WSMsgType, web
 from loguru import logger
@@ -31,6 +31,9 @@ from forensic_claw.utils.helpers import (
     current_time_str,
     extract_message_thinking_text,
 )
+
+if TYPE_CHECKING:
+    from forensic_claw.forensics import CaseStore
 
 
 class WebUIConfig(Base):
@@ -248,6 +251,43 @@ class WebUIChannel(BaseChannel):
     def _cases_root(self) -> Path | None:
         workspace = self._workspace_root
         return workspace / "forensics" / "cases" if workspace else None
+
+    def _case_store(self) -> "CaseStore | None":
+        workspace = self._workspace_root
+        if workspace is None:
+            return None
+        from forensic_claw.forensics import CaseStore
+
+        return CaseStore(workspace)
+
+    async def _ensure_case_scope(
+        self,
+        *,
+        case_id: str | None,
+        case_name: str,
+        investigator_name: str,
+    ) -> str | None:
+        """Materialize the case folder on chat start and return its case id.
+
+        The WebUI only sends caseName/investigatorName, so the case id is
+        derived from the case name here and the folder is created if missing.
+        An explicit caseId (if ever supplied) always wins.
+        """
+        if case_id:
+            return case_id
+        store = self._case_store()
+        if store is None or not case_name:
+            return case_id
+        try:
+            manifest = await asyncio.to_thread(
+                store.ensure_case,
+                case_name=case_name,
+                investigator_name=investigator_name or None,
+            )
+        except Exception:
+            logger.exception("Failed to materialize case for %s", case_name)
+            return case_id
+        return manifest.get("caseId") or case_id
 
     def _event_base(self, chat_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
         case_id = metadata.get("case_id") or metadata.get("caseId")
@@ -781,6 +821,12 @@ class WebUIChannel(BaseChannel):
                 session_id=session_id,
                 status=400,
             )
+
+        case_id = await self._ensure_case_scope(
+            case_id=case_id,
+            case_name=case_name,
+            investigator_name=investigator_name,
+        )
 
         metadata = {
             "_wants_stream": self.supports_streaming,
