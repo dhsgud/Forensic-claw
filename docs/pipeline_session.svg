@@ -1,0 +1,63 @@
+<svg width="680" viewBox="0 0 680 348" role="img" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif">
+<title>세션 관리: 토큰 기반 압축과 무관 주제 자동 fork</title>
+<desc>왼쪽 레인은 세션 토큰이 임계를 넘으면 오래된 메시지를 메모리로 요약 압축하고, 오른쪽 레인은 압축이 누적된 세션에 무관한 새 주제가 오면 남은 대화를 메모리로 보관하고 새 세션을 시작한다.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+<marker id="arrowd" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#B4B2A9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<style>
+.th{font-weight:600;font-size:14px}
+.ts{font-weight:400;font-size:12px}
+.arr{stroke:#888780;stroke-width:1.5;fill:none}
+.lead{stroke:#B4B2A9;stroke-width:1.5;fill:none;stroke-dasharray:4 4}
+</style>
+
+<text class="th" x="180" y="34" text-anchor="middle" fill="#2C2C2A">① 토큰 기반 압축</text>
+<text class="th" x="500" y="34" text-anchor="middle" fill="#2C2C2A">② 무관 주제 자동 fork</text>
+
+<g>
+<rect x="40" y="52" width="280" height="56" rx="10" fill="#FAEEDA" stroke="#854F0B"/>
+<text class="th" x="180" y="76" text-anchor="middle" fill="#412402">세션 토큰 &gt; 임계값?</text>
+<text class="ts" x="180" y="94" text-anchor="middle" fill="#854F0B">maybe_consolidate_by_tokens</text>
+</g>
+<g>
+<rect x="40" y="150" width="280" height="52" rx="10" fill="#E1F5EE" stroke="#0F6E56"/>
+<text class="th" x="180" y="172" text-anchor="middle" fill="#04342C">오래된 메시지 압축</text>
+<text class="ts" x="180" y="189" text-anchor="middle" fill="#0F6E56">MemoryConsolidator 요약</text>
+</g>
+<g>
+<rect x="40" y="244" width="280" height="58" rx="10" fill="#EEEDFE" stroke="#534AB7"/>
+<text class="th" x="180" y="268" text-anchor="middle" fill="#26215C">메모리에 요약 저장</text>
+<text class="ts" x="180" y="286" text-anchor="middle" fill="#534AB7">last_consolidated 갱신 · count++</text>
+</g>
+
+<g>
+<rect x="360" y="52" width="280" height="56" rx="10" fill="#FAEEDA" stroke="#854F0B"/>
+<text class="th" x="500" y="74" text-anchor="middle" fill="#412402">압축 ≥ 2회 &amp; 새 주제 무관?</text>
+<text class="ts" x="500" y="92" text-anchor="middle" fill="#854F0B">cosine &lt; 0.35 또는 jaccard &lt; 0.08</text>
+</g>
+<g>
+<rect x="360" y="150" width="280" height="52" rx="10" fill="#E1F5EE" stroke="#0F6E56"/>
+<text class="th" x="500" y="172" text-anchor="middle" fill="#04342C">남은 대화 메모리로 보관</text>
+<text class="ts" x="500" y="189" text-anchor="middle" fill="#0F6E56">필요 시 다시 불러옴</text>
+</g>
+<g>
+<rect x="360" y="244" width="280" height="58" rx="10" fill="#EEEDFE" stroke="#534AB7"/>
+<text class="th" x="500" y="268" text-anchor="middle" fill="#26215C">session.clear() → 새 세션</text>
+<text class="ts" x="500" y="286" text-anchor="middle" fill="#534AB7">새 주제가 전체 컨텍스트 확보</text>
+</g>
+
+<line class="arr" x1="180" y1="108" x2="180" y2="150" marker-end="url(#arrow)"/>
+<text class="ts" x="192" y="134" text-anchor="start" fill="#888780">예</text>
+<line class="arr" x1="180" y1="202" x2="180" y2="244" marker-end="url(#arrow)"/>
+<line class="arr" x1="500" y1="108" x2="500" y2="150" marker-end="url(#arrow)"/>
+<text class="ts" x="512" y="134" text-anchor="start" fill="#888780">예</text>
+<line class="arr" x1="500" y1="202" x2="500" y2="244" marker-end="url(#arrow)"/>
+
+<path class="lead" d="M320 273 H340 V80 H360" marker-end="url(#arrowd)"/>
+<text class="ts" transform="rotate(-90 350 175)" x="350" y="175" text-anchor="middle" fill="#B4B2A9">count 공유</text>
+</svg>

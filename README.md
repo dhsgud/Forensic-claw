@@ -133,6 +133,34 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
   <img src="docs/forensic_claw_pipeline.svg" alt="Forensic-Claw 처리 파이프라인" width="680">
 </div>
 
+### 반복 루프 예산 압축
+
+발신 프롬프트를 도구 결과 컴팩트로 줄인 뒤, 컨텍스트 윈도우 예산을 넘으면
+질문 고정 → 오래된 tool 그룹 드롭 → tool 결과 stub 순으로 압축해 항상 예산 안에서
+LLM을 호출합니다.
+
+<div align="center">
+  <img src="docs/pipeline_budget_fit.svg" alt="반복 루프 예산 압축" width="680">
+</div>
+
+### 지식 RAG ingest 세부
+
+파일을 순회하며 Chrome History DB와 텍스트 로그를 분기 처리한 뒤, 공통으로 임베딩과
+그래프 저장을 거쳐 `KnowledgeIngestResult`를 반환합니다.
+
+<div align="center">
+  <img src="docs/pipeline_rag_ingest.svg" alt="지식 RAG ingest 세부" width="680">
+</div>
+
+### 세션 압축 · 자동 fork
+
+세션 토큰이 임계를 넘으면 오래된 대화를 메모리로 요약 압축하고, 압축이 누적된 세션에
+무관한 새 주제가 오면 남은 맥락을 메모리에 보관한 뒤 새 세션에서 이어갑니다.
+
+<div align="center">
+  <img src="docs/pipeline_session.svg" alt="세션 압축 및 자동 fork" width="680">
+</div>
+
 ## 기준 문서
 
 - [통합 개발 스펙](docs/MASTER_DEVELOPMENT_SPEC.md)
