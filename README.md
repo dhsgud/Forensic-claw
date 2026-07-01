@@ -122,6 +122,17 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - structured case write pipeline
 - report 자동화
 
+## 처리 파이프라인
+
+채널로 들어온 메시지는 공용 `MessageBus`로 수렴한 뒤 `AgentLoop`에서
+전처리 훅 → 컨텍스트 빌드 → LLM·도구 반복 루프 → 응답 정규화 순으로 처리되어
+다시 채널로 나갑니다. 반복 루프는 도구 레지스트리와 지식 RAG/그래프 계층에 연결되어
+있으며, 상세 흐름은 아래 다이어그램을 참고하세요.
+
+<div align="center">
+  <img src="docs/forensic_claw_pipeline.svg" alt="Forensic-Claw 처리 파이프라인" width="680">
+</div>
+
 ## 기준 문서
 
 - [통합 개발 스펙](docs/MASTER_DEVELOPMENT_SPEC.md)
