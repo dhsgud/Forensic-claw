@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forensic-Claw Local Workbench</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css?v=graph-20260510">
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
@@ -85,78 +85,23 @@
           <p id="session-meta" class="subtle">세션을 준비하는 중입니다.</p>
         </section>
 
+        <button id="settings-open" class="sidebar-action" type="button">
+          <span>
+            <strong>Settings</strong>
+            <small>Runtime model and knowledge store</small>
+          </span>
+          <span class="settings-badges">
+            <span id="model-status" class="badge">idle</span>
+            <span id="knowledge-status" class="badge">idle</span>
+          </span>
+        </button>
+
         <section class="panel sessions-panel">
           <div class="panel-title-row">
             <h2>Threads</h2>
             <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
           </div>
           <div id="sessions-list" class="session-list"></div>
-        </section>
-
-        <section class="panel model-panel">
-          <div class="panel-title-row">
-            <h2>Runtime</h2>
-            <span id="model-status" class="badge">idle</span>
-          </div>
-          <label class="field">
-            <span>Provider</span>
-            <select id="model-provider"></select>
-          </label>
-          <label class="field">
-            <span>Model ID</span>
-            <input id="model-id" type="text" placeholder="qwen2.5-coder-7b-instruct">
-          </label>
-          <label class="field">
-            <span>API Base</span>
-            <input id="model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
-          </label>
-          <div class="button-row">
-            <button id="model-test" class="ghost-button" type="button">Test</button>
-            <button id="model-save" class="ghost-button" type="button">Apply</button>
-          </div>
-          <p id="model-summary" class="subtle">Runtime model endpoint is loading.</p>
-        </section>
-
-        <section class="panel knowledge-panel">
-          <div class="panel-title-row">
-            <h2>Knowledge Store</h2>
-            <span id="knowledge-status" class="badge">idle</span>
-          </div>
-          <label class="field check-field">
-            <input id="knowledge-enabled" type="checkbox">
-            <span>Enable local RAG</span>
-          </label>
-          <label class="field">
-            <span>Backend</span>
-            <select id="knowledge-backend">
-              <option value="sqlite">Local RAG + Graph Index</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Store Directory</span>
-            <input id="knowledge-store-dir" type="text" placeholder="knowledge">
-          </label>
-          <label class="field check-field">
-            <input id="vector-enabled" type="checkbox" checked>
-            <span>Enable semantic (vector) search</span>
-          </label>
-          <label class="field">
-            <span>Embedding Model</span>
-            <input id="vector-model" type="text" placeholder="nomic-embed-text">
-          </label>
-          <label class="field">
-            <span>Embedding API Base</span>
-            <input id="vector-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
-          </label>
-          <label class="field">
-            <span>Embedding Dimensions</span>
-            <input id="vector-dimensions" type="number" min="0" max="8192" placeholder="0">
-          </label>
-          <div class="button-row">
-            <button id="knowledge-test" class="ghost-button" type="button">Test DB</button>
-            <button id="knowledge-save" class="ghost-button" type="button">Apply</button>
-          </div>
-          <p id="knowledge-summary" class="subtle">Knowledge graph settings are loading.</p>
         </section>
 
         <section class="panel case-scope-panel" hidden>
@@ -211,13 +156,13 @@
             </section>
 
             <section id="graph-inspector-panel" class="panel inspector-panel graph-inspector-panel" hidden>
-              <div class="panel-title-row">
-                <h2>Graph View</h2>
+              <div class="panel-title-row graph-title-row">
                 <div class="graph-panel-actions" aria-label="Graph view controls">
                   <button id="graph-expand" class="ghost-button icon-button" type="button" aria-label="Expand graph panel" title="넓게 보기">↔</button>
                   <button id="graph-fullscreen" class="ghost-button icon-button" type="button" aria-label="Open graph fullscreen" title="전체화면">⛶</button>
                   <button id="graph-close" class="ghost-button icon-button" type="button" aria-label="Close graph panel" title="닫기">×</button>
                 </div>
+                <h2>Graph View</h2>
               </div>
               <p id="graph-summary" class="subtle">관계 그래프를 선택하세요.</p>
               <div class="graph-zoom-controls" aria-label="Graph zoom controls">
@@ -245,6 +190,84 @@
       </main>
     </div>
 
+    <dialog id="settings-dialog" class="settings-dialog">
+      <form method="dialog" class="settings-modal">
+        <header class="settings-header">
+          <div>
+            <p class="eyebrow">Workspace Settings</p>
+            <h2>Settings</h2>
+          </div>
+          <button id="settings-close" class="ghost-button icon-button" type="button" aria-label="Close settings" title="닫기">×</button>
+        </header>
+
+        <div class="settings-grid">
+          <section class="panel model-panel">
+            <div class="panel-title-row">
+              <h2>Runtime</h2>
+            </div>
+            <label class="field">
+              <span>Provider</span>
+              <select id="model-provider"></select>
+            </label>
+            <label class="field">
+              <span>Model ID</span>
+              <input id="model-id" type="text" placeholder="qwen2.5-coder-7b-instruct">
+            </label>
+            <label class="field">
+              <span>API Base</span>
+              <input id="model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
+            </label>
+            <div class="button-row">
+              <button id="model-test" class="ghost-button" type="button">Test</button>
+              <button id="model-save" class="ghost-button" type="button">Apply</button>
+            </div>
+            <p id="model-summary" class="subtle">Runtime model endpoint is loading.</p>
+          </section>
+
+          <section class="panel knowledge-panel">
+            <div class="panel-title-row">
+              <h2>Knowledge Store</h2>
+            </div>
+            <label class="field check-field">
+              <input id="knowledge-enabled" type="checkbox">
+              <span>Enable local RAG</span>
+            </label>
+            <label class="field">
+              <span>Backend</span>
+              <select id="knowledge-backend">
+                <option value="sqlite">Local RAG + Graph Index</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Store Directory</span>
+              <input id="knowledge-store-dir" type="text" placeholder="knowledge">
+            </label>
+            <label class="field check-field">
+              <input id="vector-enabled" type="checkbox" checked>
+              <span>Enable semantic (vector) search</span>
+            </label>
+            <label class="field">
+              <span>Embedding Model</span>
+              <input id="vector-model" type="text" placeholder="nomic-embed-text">
+            </label>
+            <label class="field">
+              <span>Embedding API Base</span>
+              <input id="vector-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
+            </label>
+            <label class="field">
+              <span>Embedding Dimensions</span>
+              <input id="vector-dimensions" type="number" min="0" max="8192" placeholder="0">
+            </label>
+            <div class="button-row">
+              <button id="knowledge-test" class="ghost-button" type="button">Test DB</button>
+              <button id="knowledge-save" class="ghost-button" type="button">Apply</button>
+            </div>
+            <p id="knowledge-summary" class="subtle">Knowledge graph settings are loading.</p>
+          </section>
+        </div>
+      </form>
+    </dialog>
+
     <datalist id="case-suggestions"></datalist>
     <datalist id="artifact-suggestions"></datalist>
 
@@ -255,6 +278,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js?v=graph-20260510" defer></script>
+    <script src="/ui/assets/app.js?v=settings-20260708" defer></script>
   </body>
 </html>

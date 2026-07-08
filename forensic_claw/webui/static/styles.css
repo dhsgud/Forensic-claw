@@ -131,6 +131,53 @@ button {
   overflow: hidden;
 }
 
+.settings-dialog {
+  width: min(920px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+}
+
+.settings-dialog::backdrop {
+  background: rgba(23, 33, 47, 0.42);
+}
+
+.settings-modal {
+  display: grid;
+  gap: 16px;
+  max-height: calc(100vh - 32px);
+  padding: 18px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: 0;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
 .brand {
   padding: 6px 2px 10px;
 }
@@ -217,6 +264,10 @@ button {
   gap: 6px;
 }
 
+.graph-title-row {
+  justify-content: flex-start;
+}
+
 .graph-zoom-controls {
   display: inline-flex;
   align-items: center;
@@ -235,6 +286,48 @@ button {
   min-height: 172px;
   display: flex;
   flex-direction: column;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-action:hover {
+  border-color: var(--line-strong);
+  background: #fbfdff;
+}
+
+.sidebar-action strong,
+.sidebar-action small {
+  display: block;
+}
+
+.sidebar-action strong {
+  font-size: 0.9rem;
+}
+
+.sidebar-action small {
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.settings-badges {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  flex: 0 0 auto;
 }
 
 .model-panel,
@@ -1104,8 +1197,23 @@ select:focus {
   }
 
   .setup-grid,
+  .settings-grid,
   .composer {
     grid-template-columns: 1fr;
+  }
+
+  .settings-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .settings-modal {
+    max-height: calc(100vh - 20px);
+    padding: 14px;
+  }
+
+  .sidebar-action {
+    align-items: flex-start;
   }
 
   .setup-actions {

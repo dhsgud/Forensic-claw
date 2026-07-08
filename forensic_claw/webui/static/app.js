@@ -53,6 +53,9 @@ const setupTestModel = document.querySelector("#setup-test-model");
 const setupTestDb = document.querySelector("#setup-test-db");
 const setupStart = document.querySelector("#setup-start");
 const setupStatus = document.querySelector("#setup-status");
+const settingsDialog = document.querySelector("#settings-dialog");
+const settingsOpen = document.querySelector("#settings-open");
+const settingsClose = document.querySelector("#settings-close");
 const sessionBadge = document.querySelector("#session-badge");
 const sessionMeta = document.querySelector("#session-meta");
 const scopeSummary = document.querySelector("#scope-summary");
@@ -107,6 +110,20 @@ const vectorDimensions = document.querySelector("#vector-dimensions");
 const knowledgeTest = document.querySelector("#knowledge-test");
 const knowledgeSave = document.querySelector("#knowledge-save");
 const knowledgeSummary = document.querySelector("#knowledge-summary");
+
+function openSettings() {
+  if (!settingsDialog) return;
+  if (typeof settingsDialog.showModal === "function") {
+    settingsDialog.showModal();
+  } else {
+    settingsDialog.setAttribute("open", "");
+  }
+}
+
+function closeSettings() {
+  if (!settingsDialog?.open) return;
+  settingsDialog.close();
+}
 
 function currentScope() {
   return {
@@ -2375,6 +2392,14 @@ knowledgeSave?.addEventListener("click", () => {
     setKnowledgeStatus("failed", "warn");
     knowledgeSummary.textContent = error.message || "Could not apply knowledge settings.";
   });
+});
+
+settingsOpen?.addEventListener("click", openSettings);
+settingsClose?.addEventListener("click", closeSettings);
+settingsDialog?.addEventListener("click", (event) => {
+  if (event.target === settingsDialog) {
+    closeSettings();
+  }
 });
 
 graphExpand?.addEventListener("click", toggleGraphPanelExpanded);

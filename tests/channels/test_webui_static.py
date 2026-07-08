@@ -29,7 +29,7 @@ def test_webui_attachment_tray_exposes_upload_hashes() -> None:
     html = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
     app = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
 
-    assert "graph-20260510" in html
+    assert "settings-20260708" in html
     assert "function attachmentHashLabel" in app
     assert "function attachmentHashTitle" in app
     assert "SHA256" in app
