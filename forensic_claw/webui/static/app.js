@@ -30,6 +30,7 @@ const state = {
   graphPanY: 0,
   graphDrag: null,
   dragDepth: 0,
+  pendingReportCaseId: "",
 };
 
 const SETUP_STORAGE_KEY = "forensic_claw_webui_setup_v1";
@@ -108,7 +109,10 @@ const knowledgeSave = document.querySelector("#knowledge-save");
 const knowledgeSummary = document.querySelector("#knowledge-summary");
 
 function currentScope() {
-  return { caseId: "", artifactId: "" };
+  return {
+    caseId: caseIdInput?.value?.trim() || "",
+    artifactId: artifactIdInput?.value?.trim() || "",
+  };
 }
 
 function scopeLabel({ caseId, artifactId }) {
@@ -1702,6 +1706,12 @@ function renderCaseDetail(caseData, reportContent = "", graph = null) {
     <p class="detail-meta">${escapeHtml(caseData.id)} · ${escapeHtml(caseData.status || "draft")}</p>
     <pre class="detail-block">${escapeHtml(JSON.stringify(caseData.manifest || {}, null, 2))}</pre>
   `;
+  const reportButton = document.createElement("button");
+  reportButton.type = "button";
+  reportButton.className = "ghost-button case-report-button";
+  reportButton.textContent = "Generate Report";
+  reportButton.addEventListener("click", () => generateCaseReport(caseData.id));
+  headerCard.insertBefore(reportButton, headerCard.querySelector(".detail-block"));
   caseDetail.appendChild(headerCard);
 
   const evidenceCard = document.createElement("section");
@@ -2017,6 +2027,13 @@ function handleSocketEvent(event) {
     }
     setStatus(wasStopRequested ? "응답 생성이 중지되었습니다." : "응답이 완료되었습니다.");
     refreshSessions();
+    if (state.pendingReportCaseId) {
+      const caseId = state.pendingReportCaseId;
+      state.pendingReportCaseId = "";
+      loadCase(caseId, { quiet: true }).catch((error) => {
+        setStatus(`report 로드 실패: ${error.message}`);
+      });
+    }
   }
 }
 
@@ -2193,6 +2210,56 @@ async function requestStop() {
   }
 }
 
+async function generateCaseReport(caseId) {
+  if (!caseId || state.isGenerating || state.isStopping) return;
+  const manifest = state.activeCase?.manifest || {};
+  const caseName = manifest.caseName || manifest.title || state.caseProfile?.caseName || caseId;
+  const investigatorName =
+    manifest.investigatorName || state.caseProfile?.investigatorName || "Investigator";
+
+  caseIdInput.value = caseId;
+  artifactIdInput.value = "";
+  updateScopeSummary();
+
+  makeMessage("user", "/report", "user");
+  if (state.pendingAssistant) {
+    finalizeAssistantNode(state.pendingAssistant);
+    state.pendingAssistant = null;
+  }
+  createPendingAssistantNode();
+  beginGeneration();
+  state.pendingReportCaseId = caseId;
+  setStatus("보고서를 생성하는 중입니다.");
+
+  try {
+    const data = await apiJson("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: state.sessionId,
+        caseId,
+        caseName,
+        investigatorName,
+        text: "/report",
+        attachments: [],
+      }),
+    });
+
+    state.activeSessionKey = data.sessionKey;
+    activeSessionTitle.textContent = caseName;
+    await refreshSessions();
+  } catch (error) {
+    state.pendingReportCaseId = "";
+    if (state.pendingAssistant) {
+      setMessageContent(state.pendingAssistant, `보고서 생성 실패: ${error.message}`);
+      finalizeAssistantNode(state.pendingAssistant);
+      state.pendingAssistant = null;
+    }
+    finishGeneration();
+    setStatus(`보고서 생성 실패: ${error.message}`);
+  }
+}
+
 async function sendMessage(event) {
   event.preventDefault();
   if (!state.caseProfile) {
@@ -2225,6 +2292,8 @@ async function sendMessage(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: state.sessionId,
+        caseId: currentScope().caseId,
+        artifactId: currentScope().artifactId,
         caseName: state.caseProfile.caseName,
         investigatorName: state.caseProfile.investigatorName,
         text: rawText,
