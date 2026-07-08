@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from forensic_claw.bus.events import InboundMessage
-from forensic_claw.command.builtin import cmd_hash, cmd_new, get_builtin_command_specs
+from forensic_claw.command.builtin import cmd_hash, cmd_new, cmd_report, get_builtin_command_specs
 from forensic_claw.command.router import CommandContext
+from forensic_claw.forensics import CaseStore
 from forensic_claw.session.manager import SessionManager
 
 
@@ -107,6 +108,39 @@ async def test_cmd_hash_blocks_outside_file_when_workspace_is_restricted(tmp_pat
 
     assert "Hash command denied:" in outbound.content
     assert "outside workspace" in outbound.content
+
+
+@pytest.mark.asyncio
+async def test_cmd_report_normalizes_metadata_case_id_when_case_name_absent(tmp_path: Path) -> None:
+    store = CaseStore(tmp_path)
+    manifest = store.ensure_case(case_name="Case Alpha", investigator_name="Investigator One")
+    case_id = manifest["caseId"]
+    msg = InboundMessage(
+        channel="webui",
+        sender_id="user",
+        chat_id="sess_report",
+        content="/report",
+        metadata={"case_id": "Case Alpha"},
+    )
+    loop = SimpleNamespace(
+        provider=object(),
+        workspace=tmp_path,
+        model="fake-model",
+        knowledge_service=None,
+    )
+    ctx = CommandContext(
+        msg=msg,
+        session=None,
+        key=f"webui:sess_report:case:{case_id}",
+        raw="/report",
+        loop=loop,
+    )
+
+    outbound = await cmd_report(ctx)
+
+    assert outbound.metadata["case_id"] == case_id
+    assert (store.case_dir(case_id) / "report.md").is_file()
+    assert "case_not_found" not in outbound.content
 
 
 def test_builtin_command_specs_include_hash_command() -> None:

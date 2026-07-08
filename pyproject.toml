@@ -78,6 +78,7 @@ include = [
     "forensic_claw/templates/**/*.md",
     "forensic_claw/skills/**/*.md",
     "forensic_claw/skills/**/*.sh",
+    "forensic_claw/forensics/**/*.json",
 ]
 exclude = [
     "**/__pycache__/**",
@@ -99,6 +100,7 @@ packages = ["forensic_claw"]
 "forensic_claw/skills/memory/SKILL.md" = "forensic_claw/skills/memory/SKILL.md"
 "forensic_claw/skills/skill-creator/SKILL.md" = "forensic_claw/skills/skill-creator/SKILL.md"
 "forensic_claw/skills/summarize/SKILL.md" = "forensic_claw/skills/summarize/SKILL.md"
+"forensic_claw/forensics/report/templates/knpa_forensic_report.json" = "forensic_claw/forensics/report/templates/knpa_forensic_report.json"
 
 [tool.hatch.build.targets.wheel.sources]
 "forensic_claw" = "forensic_claw"

@@ -42,6 +42,7 @@ _BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec("/hash", "Calculate MD5, SHA256, and SHA512 for a local file"),
     BuiltinCommandSpec("/model", "Show or change the local model endpoint"),
     BuiltinCommandSpec("/knowledge", "Show or prepare the local RAG and graph evidence store"),
+    BuiltinCommandSpec("/report", "Generate a case report from the local police-form template"),
     BuiltinCommandSpec("/help", "Show available commands"),
 )
 
@@ -503,6 +504,89 @@ async def cmd_knowledge(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_report(ctx: CommandContext) -> OutboundMessage:
+    """Generate a forensic case report from the local template."""
+    loop = ctx.loop
+    provider = getattr(loop, "provider", None)
+    workspace = getattr(loop, "workspace", None)
+    if provider is None or workspace is None:
+        return _report_text(ctx, "보고서를 생성할 수 없습니다: 모델 또는 워크스페이스가 설정되지 않았습니다.")
+
+    from forensic_claw.forensics import CaseStore, derive_case_id
+    from forensic_claw.forensics.report import ReportService
+    from forensic_claw.session.scopes import normalize_scope_id, parse_scoped_session_key
+
+    metadata = ctx.msg.metadata or {}
+    case_name = str(metadata.get("case_name") or "").strip()
+    investigator_name = str(metadata.get("investigator_name") or "").strip()
+
+    scoped_case_id = parse_scoped_session_key(ctx.key).case_id
+    raw_case_id = metadata.get("case_id") or metadata.get("caseId")
+    case_id = normalize_scope_id(str(raw_case_id)) if raw_case_id else scoped_case_id
+    case_id = case_id or scoped_case_id
+    # Materialize the case from its name so a report can be generated even if
+    # the folder was never created (e.g. CLI-only usage).
+    if case_name:
+        try:
+            manifest = await asyncio.to_thread(
+                CaseStore(workspace).ensure_case,
+                case_name=case_name,
+                investigator_name=investigator_name or None,
+            )
+            case_id = manifest.get("caseId") or case_id
+        except ValueError:
+            pass
+    if not case_id and case_name:
+        try:
+            case_id = derive_case_id(case_name)
+        except ValueError:
+            case_id = None
+    if not case_id:
+        return _report_text(
+            ctx,
+            "케이스가 지정되지 않았습니다. 케이스 이름을 설정한 뒤 다시 시도하세요.",
+        )
+
+    service = ReportService(
+        workspace=workspace,
+        provider=provider,
+        model=getattr(loop, "model", None),
+        knowledge_service=getattr(loop, "knowledge_service", None),
+        app_version=__version__,
+    )
+
+    if ctx.args.strip().lower() == "status":
+        report_path = service.case_store.case_dir(case_id) / "report.md"
+        if report_path.is_file():
+            return _report_text(ctx, f"현재 보고서가 존재합니다: {report_path}")
+        return _report_text(ctx, "아직 생성된 보고서가 없습니다. /report 로 생성하세요.")
+
+    result = await service.generate_report(case_id)
+    if not result.get("ok"):
+        return _report_text(ctx, f"보고서 생성 실패: {result.get('error')}")
+
+    llm_sections = sum(1 for section in result.get("sections", []) if section.get("usedLlm"))
+    header = (
+        f"'{case_id}' 케이스 보고서를 생성했습니다 (report.md, "
+        f"서술 섹션 {llm_sections}개).\n\n"
+    )
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=header + result.get("markdown", ""),
+        metadata={**metadata, "case_id": case_id},
+    )
+
+
+def _report_text(ctx: CommandContext, text: str) -> OutboundMessage:
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=text,
+        metadata={"render_as": "text"},
+    )
+
+
 def register_builtin_commands(router: CommandRouter) -> None:
     """Register the default set of slash commands."""
     router.priority("/stop", cmd_stop)
@@ -517,4 +601,6 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/model ", cmd_model)
     router.exact("/knowledge", cmd_knowledge)
     router.prefix("/knowledge ", cmd_knowledge)
+    router.exact("/report", cmd_report)
+    router.prefix("/report ", cmd_report)
     router.exact("/help", cmd_help)
