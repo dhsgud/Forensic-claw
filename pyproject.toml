@@ -1,6 +1,6 @@
 [project]
 name = "forensic-claw"
-version = "0.3.1"
+version = "0.3.2"
 description = "A local forensic agent framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -78,6 +78,7 @@ include = [
     "forensic_claw/webui/**/*.html",
     "forensic_claw/webui/**/*.css",
     "forensic_claw/webui/**/*.js",
+    "forensic_claw/webui/**/*.png",
     "forensic_claw/templates/**/*.md",
     "forensic_claw/skills/**/*.md",
     "forensic_claw/skills/**/*.sh",
