@@ -127,10 +127,9 @@ class MemoryStore:
         """Consolidate the provided message chunk into MEMORY.md + HISTORY.md."""
         if not messages:
             return True
-        from forensic_claw.forensics.trust import is_local_endpoint
+        from forensic_claw.security.model_proxy import evidence_allowed
 
-        endpoint = getattr(provider, "api_base", None)
-        if isinstance(endpoint, str) and not is_local_endpoint(endpoint):
+        if not await asyncio.to_thread(evidence_allowed, provider):
             logger.warning("Remote memory consolidation blocked to preserve local evidence")
             return False
 

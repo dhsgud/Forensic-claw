@@ -620,9 +620,12 @@ class WebUIChannel(BaseChannel):
     async def _handle_model_config(self, _request: web.Request) -> web.Response:
         if not self._model_settings:
             return self._json_response({"error": "model_settings_unavailable"}, status=503)
-        return self._json_response({"modelConfig": self._model_settings.snapshot()})
+        snapshot = await asyncio.to_thread(self._model_settings.snapshot)
+        return self._json_response({"modelConfig": snapshot})
 
     async def _handle_model_config_update(self, request: web.Request) -> web.Response:
+        from forensic_claw.runtime.model_settings import ModelConsentRequiredError
+
         if not self._model_settings:
             return self._json_response(
                 {"ok": False, "error": "model_settings_unavailable"}, status=503
@@ -632,6 +635,9 @@ class WebUIChannel(BaseChannel):
         except Exception:
             return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
 
+        if not isinstance(body, dict):
+            return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
+
         api_base_supplied = "apiBase" in body or "api_base" in body
         try:
             model_config = await self._model_settings.apply(
@@ -639,6 +645,17 @@ class WebUIChannel(BaseChannel):
                 model=body.get("model"),
                 api_base=body.get("apiBase", body.get("api_base")),
                 api_base_supplied=api_base_supplied,
+                **({"consent_token": body["consentToken"]} if "consentToken" in body else {}),
+            )
+        except ModelConsentRequiredError as exc:
+            return self._json_response(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "security": exc.security,
+                    "confirmation": exc.confirmation,
+                },
+                status=409,
             )
         except ValueError as exc:
             return self._json_response({"ok": False, "error": str(exc)}, status=400)
@@ -652,6 +669,8 @@ class WebUIChannel(BaseChannel):
         try:
             body = await request.json()
         except Exception:
+            body = {}
+        if not isinstance(body, dict):
             body = {}
         result = await self._model_settings.test_connection(
             provider=body.get("provider"),

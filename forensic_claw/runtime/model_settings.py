@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import secrets
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -14,9 +17,17 @@ from forensic_claw.config.schema import Config, ModelProfile, normalize_openai_a
 from forensic_claw.providers.base import LLMProvider
 from forensic_claw.providers.factory import create_provider
 from forensic_claw.providers.registry import PROVIDERS, find_by_name
+from forensic_claw.security.model_proxy import ModelSecurityProxy, approval_scope, assess_endpoint
 
 ApplyCallback = Callable[[LLMProvider, str], Awaitable[None] | None]
 ProviderFactory = Callable[[Config], LLMProvider]
+
+
+class ModelConsentRequiredError(ValueError):
+    def __init__(self, security: dict[str, Any], confirmation: dict[str, Any]) -> None:
+        super().__init__("모델 보안 경고에 대한 동의가 필요합니다.")
+        self.security = security
+        self.confirmation = confirmation
 
 
 class RuntimeModelSettings:
@@ -33,6 +44,7 @@ class RuntimeModelSettings:
         self.config_path = config_path
         self.provider_factory = provider_factory
         self._callbacks: list[ApplyCallback] = []
+        self._consents: dict[str, tuple[str, int, float]] = {}
 
     def add_apply_callback(self, callback: ApplyCallback) -> None:
         self._callbacks.append(callback)
@@ -50,6 +62,14 @@ class RuntimeModelSettings:
             "apiBase": self.config.get_api_base(),
             "explicitApiBase": explicit_api_base,
             "apiKeyConfigured": bool(provider_config and provider_config.api_key),
+            "security": ModelSecurityProxy(
+                self.config.get_api_base(),
+                approved=bool(
+                    provider_config
+                    and provider_config.evidence_approval
+                    == approval_scope(self.config.get_api_base(), self.config.agents.defaults.model)
+                ),
+            ).assess(),
             "activeProfile": self.config.models.active_profile or None,
             "profiles": [
                 {
@@ -79,8 +99,17 @@ class RuntimeModelSettings:
         api_base: str | None = None,
         api_base_supplied: bool = False,
         profile_name: str | None = None,
+        consent_token: str | None = None,
     ) -> dict[str, Any]:
         """Persist model settings and apply them to runtime callbacks."""
+        for name, value in (
+            ("provider", provider),
+            ("model", model),
+            ("api_base", api_base),
+            ("consent_token", consent_token),
+        ):
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"{name} must be a string.")
         updated = self.config.model_copy(deep=True)
 
         if provider is not None:
@@ -107,6 +136,26 @@ class RuntimeModelSettings:
         if api_base_supplied:
             target_provider_config.api_base = normalize_openai_api_base(api_base)
 
+        endpoint = updated.get_api_base()
+        scope = approval_scope(endpoint, updated.agents.defaults.model)
+        security = await asyncio.to_thread(assess_endpoint, endpoint)
+        if not security["canOverride"]:
+            raise ValueError(security["reason"])
+        if security["status"] == "FAIL" and target_provider_config.evidence_approval != scope:
+            stage = 0
+            if consent_token:
+                consent = self._consents.pop(consent_token, None)
+                if not consent or consent[0] != scope or consent[2] < time.monotonic():
+                    raise ValueError(
+                        "동의가 만료되었거나 모델 주소·이름이 바뀌었습니다. 다시 저장하세요."
+                    )
+                stage = consent[1]
+            if stage < 2:
+                self._require_consent(scope, stage + 1, security, endpoint)
+            target_provider_config.evidence_approval = scope
+        elif target_provider_config.evidence_approval != scope:
+            target_provider_config.evidence_approval = ""
+
         new_provider = self.provider_factory(updated)
 
         if profile_name is not None:
@@ -129,6 +178,34 @@ class RuntimeModelSettings:
                 await result
 
         return self.snapshot()
+
+    def _require_consent(
+        self,
+        scope: str,
+        step: int,
+        security: dict[str, Any],
+        endpoint: str | None,
+    ) -> None:
+        now = time.monotonic()
+        self._consents = {key: value for key, value in self._consents.items() if value[2] > now}
+        if len(self._consents) >= 100:
+            self._consents.clear()
+        token = secrets.token_urlsafe(32)
+        self._consents[token] = (scope, step, now + 300)
+        message = (
+            "로컬 모델로 확인되지 않았습니다. 로컬 모델이 아니어도 사용하시겠습니까?"
+            if step == 1
+            else "증거가 외부로 전송될 수도 있습니다. 정말 사용하시겠습니까?"
+        )
+        raise ModelConsentRequiredError(
+            security,
+            {
+                "step": step,
+                "token": token,
+                "message": message,
+                "apiBase": endpoint,
+            },
+        )
 
     @staticmethod
     def _normalize_profile_name(name: str) -> str:
@@ -201,11 +278,15 @@ class RuntimeModelSettings:
         endpoint = f"{effective_api_base.rstrip('/')}/models"
         headers: dict[str, str] = {}
         provider_config = getattr(self.config.providers, provider_name or "", None)
-        if provider_config and provider_config.api_key:
+        configured_base = provider_config.api_base if provider_config else None
+        configured_base = configured_base or (spec.default_api_base if spec else None)
+        if provider_config and provider_config.api_key and configured_base == effective_api_base:
             headers["Authorization"] = f"Bearer {provider_config.api_key}"
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(
+                timeout=5.0, trust_env=False, follow_redirects=False
+            ) as client:
                 response = await client.get(endpoint, headers=headers)
             payload: dict[str, Any] = {}
             try:
@@ -223,6 +304,7 @@ class RuntimeModelSettings:
                 "apiBase": effective_api_base,
                 "status": response.status_code,
                 "models": models,
+                "security": await asyncio.to_thread(assess_endpoint, effective_api_base),
                 "error": None if 200 <= response.status_code < 300 else response.text[:300],
             }
         except Exception as exc:
@@ -231,4 +313,5 @@ class RuntimeModelSettings:
                 "provider": provider_name,
                 "apiBase": effective_api_base,
                 "error": str(exc),
+                "security": await asyncio.to_thread(assess_endpoint, effective_api_base),
             }

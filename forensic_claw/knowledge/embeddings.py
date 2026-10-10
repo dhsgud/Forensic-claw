@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from loguru import logger
 
-from forensic_claw.forensics.trust import is_local_endpoint
+from forensic_claw.security.model_proxy import ModelSecurityProxy
 
 
 class Embedder:
@@ -36,6 +37,7 @@ class Embedder:
         self.timeout = float(timeout)
         self._client: Any | None = None
         self._client_base: str | None = None
+        self.security_proxy: ModelSecurityProxy | None = None
 
     @property
     def ready(self) -> bool:
@@ -45,8 +47,11 @@ class Embedder:
     def _get_client(self) -> Any | None:
         if not self.ready:
             return None
-        if not is_local_endpoint(self.api_base):
-            logger.warning("Evidence embeddings require a loopback API endpoint")
+        proxy = self.security_proxy
+        if proxy is None or proxy.endpoint != self.api_base.rstrip("/"):
+            proxy = ModelSecurityProxy(self.api_base)
+        if not proxy.assess()["allowed"]:
+            logger.warning("Evidence embedding destination failed the model security proxy")
             return None
         if self._client is not None and self._client_base == self.api_base:
             return self._client
@@ -55,7 +60,17 @@ class Embedder:
         except Exception as exc:  # pragma: no cover - openai is a hard dependency
             logger.warning("Embeddings disabled: openai SDK unavailable: {}", exc)
             return None
-        self._client = OpenAI(base_url=self.api_base, api_key=self.api_key, timeout=self.timeout)
+        self._client = OpenAI(
+            base_url=self.api_base,
+            api_key=self.api_key,
+            timeout=self.timeout,
+            http_client=httpx.Client(
+                trust_env=False,
+                follow_redirects=False,
+                timeout=self.timeout,
+                event_hooks={"request": [proxy.guard_request]},
+            ),
+        )
         self._client_base = self.api_base
         return self._client
 

@@ -10,10 +10,12 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import json_repair
 from openai import AsyncOpenAI
 
 from forensic_claw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from forensic_claw.security.model_proxy import ModelSecurityProxy
 
 if TYPE_CHECKING:
     from forensic_claw.providers.registry import ProviderSpec
@@ -103,16 +105,19 @@ class OpenAICompatProvider(LLMProvider):
         default_model: str = "gpt-4o",
         extra_headers: dict[str, str] | None = None,
         spec: ProviderSpec | None = None,
+        security_proxy: ModelSecurityProxy | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self._spec = spec
+        self.security_proxy = security_proxy
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
 
         effective_base = api_base or (spec.default_api_base if spec else None) or None
+        self.api_base = effective_base
 
         self._client = AsyncOpenAI(
             api_key=api_key or "no-key",
@@ -121,6 +126,11 @@ class OpenAICompatProvider(LLMProvider):
                 "x-session-affinity": uuid.uuid4().hex,
                 **(extra_headers or {}),
             },
+            http_client=httpx.AsyncClient(
+                trust_env=False, follow_redirects=False, timeout=httpx.Timeout(600.0, connect=5.0),
+                event_hooks={"request": [security_proxy.guard_async_request]}
+                if security_proxy else None,
+            ),
         )
 
     def _setup_env(self, api_key: str, api_base: str | None) -> None:

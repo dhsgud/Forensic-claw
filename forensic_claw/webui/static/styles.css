@@ -1383,3 +1383,4 @@ dialog::backdrop { background: rgba(12, 31, 29, .42); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+#model-summary { white-space: pre-line; overflow-wrap: anywhere; }

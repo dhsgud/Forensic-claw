@@ -99,6 +99,7 @@ class KnowledgeService:
         self.enabled = bool(getattr(config, "enabled", True))
         self.backend = create_backend(config, workspace)
         self.embedder = create_embedder(config)
+        self.model_security_proxy = None
         logger.debug(
             "KnowledgeService initialized: workspace={} enabled={} backend={} vectorReady={}",
             workspace,
@@ -113,6 +114,7 @@ class KnowledgeService:
         api_base: str | None,
         api_key: str | None = None,
         model: str | None = None,
+        security_proxy: Any = None,
     ) -> None:
         """Point semantic search at the active LLM endpoint when none is set.
 
@@ -126,6 +128,9 @@ class KnowledgeService:
             self.embedder.model = model.strip()
         if api_key:
             self.embedder.api_key = api_key
+        self.model_security_proxy = security_proxy
+        self.embedder.security_proxy = security_proxy
+        self.embedder._client = None
         logger.debug(
             "Knowledge embedding endpoint set: ready={} model={} apiBase={}",
             self.embedder.ready,
@@ -148,6 +153,7 @@ class KnowledgeService:
         self.enabled = bool(getattr(config, "enabled", True))
         self.backend = create_backend(config, self.workspace)
         self.embedder = create_embedder(config)
+        self.embedder.security_proxy = self.model_security_proxy
         logger.info(
             "KnowledgeService reconfigured: enabled={} backend={} vectorReady={}",
             self.enabled,

@@ -6,6 +6,7 @@ from forensic_claw.config.schema import Config
 from forensic_claw.providers.base import GenerationSettings, LLMProvider
 from forensic_claw.providers.openai_compat_provider import OpenAICompatProvider
 from forensic_claw.providers.registry import find_by_name
+from forensic_claw.security.model_proxy import ModelSecurityProxy, approval_scope
 
 
 def create_provider(config: Config) -> LLMProvider:
@@ -28,6 +29,14 @@ def create_provider(config: Config) -> LLMProvider:
         default_model=model,
         extra_headers=provider_config.extra_headers if provider_config else None,
         spec=spec,
+        security_proxy=ModelSecurityProxy(
+            config.get_api_base(model),
+            approved=bool(
+                provider_config
+                and provider_config.evidence_approval
+                == approval_scope(config.get_api_base(model), model)
+            ),
+        ),
     )
 
     defaults = config.agents.defaults

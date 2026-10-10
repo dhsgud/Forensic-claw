@@ -29,8 +29,8 @@ from forensic_claw.forensics.trust import (
     CLAIM_INSTRUCTION,
     EvidenceObject,
     HallucinationDetector,
-    is_local_endpoint,
 )
+from forensic_claw.security.model_proxy import BLOCKED_MESSAGE, evidence_allowed
 from forensic_claw.session.scopes import normalize_scope_id
 from forensic_claw.utils.helpers import strip_think
 
@@ -185,10 +185,9 @@ class ReportGenerator:
     async def _llm(
         self, spec: SectionSpec, context: CaseContext
     ) -> tuple[str, list[str], bool, list[dict[str, Any]]]:
-        endpoint = getattr(self.provider, "api_base", None)
-        if endpoint is not None and not is_local_endpoint(endpoint):
+        if not await asyncio.to_thread(evidence_allowed, self.provider):
             return (
-                "증거 외부 전송을 차단했습니다. 보고서 모델의 API 주소를 localhost/loopback으로 설정하세요.",
+                BLOCKED_MESSAGE,
                 [],
                 False,
                 [],

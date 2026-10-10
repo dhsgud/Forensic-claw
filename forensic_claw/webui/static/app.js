@@ -235,7 +235,11 @@ function renderModelConfig(config) {
   modelId.value = config.model || "";
   modelApiBase.value = config.apiBase || "";
   modelSummary.textContent = `${config.providerLabel || config.provider || "provider"} - ${config.model || "model"} - ${config.apiBase || "apiBase unset"}`;
-  setModelStatus("ready", "success");
+  const security = config.security;
+  if (security) {
+    modelSummary.textContent += `\n보안 프록시: ${security.status}${security.approved ? " · 사용자 동의로 허용" : ""}\n${security.reason}`;
+  }
+  setModelStatus(security?.status || "ready", security?.status === "FAIL" ? "warn" : "success");
 }
 
 function syncDefaultApiBaseFromProvider() {
@@ -425,8 +429,9 @@ async function testSetupModelConfig() {
   });
   const result = data.result || {};
   setupStatus.textContent = result.ok
-    ? `연결되었습니다. ${result.models?.length ? result.models.slice(0, 3).join(", ") : "Endpoint responded."}`
+    ? `연결되었습니다. 보안 프록시: ${result.security?.status || "미확인"}. ${result.models?.length ? result.models.slice(0, 3).join(", ") : "Endpoint responded."}`
     : `연결 실패: ${result.error || "응답을 받지 못했습니다."}`;
+  if (!result.ok && result.security) setupStatus.textContent += ` 보안 프록시: ${result.security.status}. ${result.security.reason}`;
 }
 
 async function testSetupKnowledgeConfig() {
@@ -458,11 +463,7 @@ async function completeInitialSetup(event) {
   setupStart.disabled = true;
   setupStatus.textContent = "설정을 저장하는 중입니다.";
   try {
-    const data = await apiJson("/api/model-config", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(modelPayload),
-    });
+    const data = await applyModelWithConsent(modelPayload);
     const knowledgeData = await apiJson("/api/knowledge-config", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1511,9 +1512,30 @@ async function apiJson(url, options = {}) {
     }
   }
   if (!response.ok) {
-    throw new Error(data.error || `HTTP ${response.status}`);
+    const error = new Error(data.error || `HTTP ${response.status}`);
+    error.data = data;
+    error.status = response.status;
+    throw error;
   }
   return data;
+}
+
+async function applyModelWithConsent(payload) {
+  let consentToken;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await apiJson("/api/model-config", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, consentToken }),
+      });
+    } catch (error) {
+      const confirmation = error.data?.confirmation;
+      if (error.status !== 409 || !confirmation || confirmation.step !== attempt + 1 || attempt === 2) throw error;
+      const message = `보안 프록시: FAIL · 확인 ${confirmation.step}/2\n\n${confirmation.message}\n\n서버: ${confirmation.apiBase || payload.apiBase || ""}`;
+      if (!window.confirm(message)) throw new Error("모델 변경을 취소했습니다. 기존 설정을 유지합니다.");
+      consentToken = confirmation.token;
+    }
+  }
 }
 
 async function apiJsonOptional(url) {
@@ -1699,10 +1721,10 @@ async function testModelConfig() {
     });
     const result = data.result || {};
     const models = result.models || [];
-    setModelStatus(result.ok ? "ok" : "failed", result.ok ? "success" : "warn");
+    setModelStatus(result.security?.status || (result.ok ? "ok" : "failed"), result.ok && result.security?.status !== "FAIL" ? "success" : "warn");
     modelSummary.textContent = result.ok
-      ? `Connected. ${models.length ? `Models: ${models.slice(0, 3).join(", ")}` : "Endpoint responded."}`
-      : `Connection failed. ${result.error || "No response."}`;
+      ? `연결됨 · 보안 프록시: ${result.security?.status || "미확인"}\n${result.security?.reason || ""}\n${models.length ? `모델: ${models.slice(0, 3).join(", ")}` : "Endpoint responded."}`
+      : `연결 실패 · 보안 프록시: ${result.security?.status || "미확인"}\n${result.security?.reason || ""}\n${result.error || "응답을 받지 못했습니다."}`;
   } catch (error) {
     setModelStatus("failed", "warn");
     modelSummary.textContent = error.message || "Connection test failed.";
@@ -1715,11 +1737,7 @@ async function saveModelConfig() {
   setModelStatus("applying");
   modelSave.disabled = true;
   try {
-    const data = await apiJson("/api/model-config", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const data = await applyModelWithConsent(payload);
     renderModelConfig(data.modelConfig);
   } catch (error) {
     setModelStatus("failed", "warn");

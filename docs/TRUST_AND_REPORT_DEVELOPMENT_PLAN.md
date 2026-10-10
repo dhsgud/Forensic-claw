@@ -61,8 +61,8 @@ separately from event time. Hashes are computed in code, never supplied by the m
 - ReportLab PDF resources and the new general report template are included in the Windows spec.
   The source CLI, package resource collection, PDF rendering and lint are checked; an EXE rebuild
   and live LLM/EVTX/hive evaluation are not part of the completed checks.
-- Model and embedding evidence destinations are limited to loopback, with local tools only in case
-  mode. Remote memory consolidation is blocked. This is not an operating-system network sandbox.
+- Model/embedding destinations use the security proxy described below; case mode still permits
+  local tools only. This is not an operating-system network sandbox.
 - Parser limits remain: 256 MiB default file size, 10,000 Chrome/event/hive records, hive depth 64.
   Report retrieval uses six hits/query, 600 characters/hit and an 8,000-character section context.
   These are bounded observations, not a complete device examination or a malware verdict.
@@ -115,7 +115,8 @@ Final checks (2026-10-10): `py -3.12 -m pytest tests -q` — 571 passed;
 - Configured model `empero-ai/Qwen3.8-27B-Ridge-GGUF` differs from the server-returned identity
   `augustine223/Huihui-Qwen3.8-27B-abliterated-KO-i1-Ridge`. This is server metadata, not an independent
   verification of model weights. The alternative localhost provider was offline. The selected server
-  is non-loopback: only synthetic benchmark inputs were sent; real-case analysis remains blocked.
+  is non-loopback: only synthetic benchmark inputs were sent. That release used a loopback-only gate;
+  the subsequent destination proxy below now accepts its private Tailscale address.
 - An injected instruction can contain text that passes a substring/citation gate. The independent
   oracle explicitly excludes instruction text and reports it as wrong even if the gate accepts it.
   Passing this benchmark is not proof of general hallucination resistance or real-case accuracy.
@@ -128,4 +129,27 @@ Final checks (2026-10-10): `py -3.12 -m pytest tests -q` — 571 passed;
   replaces only the HTTP model boundary; its two-page PDF was rendered and visually inspected.
   Frozen EXE live-model evaluation additionally passed 20/20 questions with zero API errors.
   This separate validation run does not replace or inflate the 59/60 baseline above.
+
+## Destination proxy update (v0.3.1)
+
+- Replaced the loopback-only evidence gate with an in-process model security proxy. PASS means all
+  resolved addresses belong to loopback, RFC1918, IPv6 ULA, or the 100.64/10 overlay/CGNAT range.
+  Public/special addresses and unresolved hosts produce FAIL. This is network classification, not
+  independent verification of model weights or proof that the server never forwards to a cloud API.
+- FAIL requires two sequential WebUI confirmations. Five-minute, single-use server challenges bind
+  to the selected API URL and model. Neither first-stage consent nor cancellation updates config.
+  After both confirmations, FAIL remains visible with an explicit user-approval marker.
+- The factory installs the same request proxy for chat and streaming; reports, background analysis
+  and memory use the same destination policy. Same-URL embeddings share consent. A separately
+  configured FAIL embedding endpoint remains blocked and falls back to keyword search.
+- Before each request, the proxy re-resolves DNS and pins the checked IP while retaining HTTP Host,
+  TLS SNI and certificate validation. Automatic redirects and environment HTTP proxies are disabled.
+  Invalid URL schemes/credentials are not eligible for override. Case tool restrictions remain.
+- Validation: Python 604 passed; Node renderer/confirmation tests 6 passed; Ruff and diff checks
+  passed. Frozen Windows x64 v0.3.1 passed CLI, UI, case upload, checked chat, HTML/PDF/audit smoke.
+  Aside exercised the actual WebUI save flow, both warning messages, and second-stage cancellation;
+  the cancellation test substitutes only the browser confirmation boundary.
+- The configured Tailscale server resolved to a private overlay IP (PASS). A synthetic request through
+  the pinned-IP HTTPS provider succeeded using Pi credentials. No real case evidence was sent for
+  this connectivity check. The previous model-accuracy baseline is unchanged, not a new evaluation.
   Native parser accuracy, large real cases and Windows code signing remain outside these checks.

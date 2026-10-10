@@ -28,9 +28,9 @@ from forensic_claw.forensics.trust import (
     CLAIM_INSTRUCTION,
     EVIDENCE_TOOLS,
     HallucinationDetector,
-    is_local_endpoint,
 )
 from forensic_claw.providers.base import LLMProvider
+from forensic_claw.security.model_proxy import BLOCKED_MESSAGE, evidence_allowed
 from forensic_claw.utils.helpers import build_assistant_message
 
 
@@ -186,9 +186,8 @@ class SubagentManager:
             case_id = (metadata or {}).get("case_id") or (metadata or {}).get("caseId")
             grounded_hits = []
             evidence_mode = bool(case_id and self.knowledge_service)
-            endpoint = getattr(self.provider, "api_base", None)
-            if evidence_mode and endpoint is not None and not is_local_endpoint(endpoint):
-                raise ValueError("Evidence analysis requires a loopback model API endpoint")
+            if evidence_mode and not await asyncio.to_thread(evidence_allowed, self.provider):
+                raise ValueError(BLOCKED_MESSAGE)
             if evidence_mode:
                 data = await asyncio.to_thread(self.knowledge_service.search, task, case_id=case_id)
                 grounded_hits.extend(data.get("hits", []))

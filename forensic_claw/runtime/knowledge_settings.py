@@ -114,6 +114,9 @@ class RuntimeKnowledgeSettings:
             timeout=vector.request_timeout_seconds,
         )
 
+        if self.service:
+            embedder.security_proxy = self.service.model_security_proxy
+
         if not embedder.enabled:
             return {"enabled": False, "backend": "sqlite", "state": "disabled", "model": embedder.model}
         if not embedder.ready:

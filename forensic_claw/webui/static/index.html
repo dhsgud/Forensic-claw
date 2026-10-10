@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forensic-Claw · 포렌식 워크벤치</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708-workbench-20261010">
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708-workbench-20261010-proxy">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
@@ -232,7 +232,7 @@
         <div class="settings-grid">
           <section class="panel model-panel">
             <div class="panel-title-row">
-              <h2>로컬 모델</h2>
+              <h2>분석 모델 · 보안 프록시</h2>
             </div>
             <label class="field">
               <span>연결 방식</span>
@@ -251,6 +251,7 @@
               <button id="model-save" class="ghost-button" type="button">저장</button>
             </div>
             <p id="model-summary" class="subtle">모델 설정을 불러오는 중입니다.</p>
+            <p class="subtle">PASS: 사설망 주소 확인 · FAIL: 로컬 미확인. FAIL 서버는 두 번의 경고에 동의하면 사용합니다. 동의는 현재 주소·모델에만 적용됩니다.</p>
           </section>
 
           <section class="panel knowledge-panel">
@@ -307,6 +308,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js?v=settings-20260708-workbench-20261010" defer></script>
+    <script src="/ui/assets/app.js?v=settings-20260708-workbench-20261010-proxy" defer></script>
   </body>
 </html>

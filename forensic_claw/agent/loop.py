@@ -192,6 +192,11 @@ class AgentLoop:
             if isinstance(workspace, Path)
             else None
         )
+        if self.knowledge_service:
+            self.knowledge_service.set_embedding_endpoint(
+                api_base=None,
+                security_proxy=getattr(provider, "security_proxy", None),
+            )
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -262,6 +267,11 @@ class AgentLoop:
         self.memory_consolidator.provider = provider
         self.memory_consolidator.model = model
         self.memory_consolidator.max_completion_tokens = provider.generation.max_tokens
+        if self.knowledge_service:
+            self.knowledge_service.set_embedding_endpoint(
+                api_base=None,
+                security_proxy=getattr(provider, "security_proxy", None),
+            )
         logger.info("Runtime model settings applied: {}", model)
 
     def _register_default_tools(self) -> None:
@@ -550,8 +560,8 @@ class AgentLoop:
             CLAIM_INSTRUCTION,
             EVIDENCE_TOOLS,
             HallucinationDetector,
-            is_local_endpoint,
         )
+        from forensic_claw.security.model_proxy import BLOCKED_MESSAGE, evidence_allowed
         from forensic_claw.session.scopes import parse_scoped_session_key
 
         scope = (metadata or {}).get("case_id") or (metadata or {}).get("caseId")
@@ -559,9 +569,8 @@ class AgentLoop:
         if scope:
             metadata = {**(metadata or {}), "case_id": scope}
         evidence_mode = bool(scope and self.knowledge_service)
-        endpoint = getattr(self.provider, "api_base", None)
-        if evidence_mode and endpoint is not None and not is_local_endpoint(endpoint):
-            text = "증거 외부 전송을 차단했습니다. 분석 모델의 API 주소를 localhost/loopback으로 설정하세요."
+        if evidence_mode and not await asyncio.to_thread(evidence_allowed, self.provider):
+            text = BLOCKED_MESSAGE
             return text, [], [*messages, {"role": "assistant", "content": text}]
         grounded_hits = []
         if evidence_mode:
