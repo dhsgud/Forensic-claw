@@ -74,6 +74,7 @@ class GeneratedSection:
     markdown: str
     sources: list[str] = field(default_factory=list)
     used_llm: bool = False
+    checks: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -87,7 +88,7 @@ class GeneratedReport:
     sections: list[GeneratedSection] = field(default_factory=list)
 
     def to_markdown(self) -> str:
-        lines = [f"# {self.title}", ""]
+        lines = [f"# {self.title}", "", "검토용 초안 — 수사관의 확인과 서명이 필요합니다.", ""]
         for section in self.sections:
             lines.append(f"## {section.title}")
             lines.append("")

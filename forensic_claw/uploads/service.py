@@ -60,6 +60,7 @@ class UploadRecord:
     message: str
     uploaded_at: str
     case_name: str | None = None
+    case_id: str | None = None
     investigator_name: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     hashes: dict[str, str] = field(default_factory=dict)
@@ -76,6 +77,7 @@ class UploadRecord:
         payload["sizeBytes"] = payload.pop("size_bytes")
         payload["uploadedAt"] = payload.pop("uploaded_at")
         payload["caseName"] = payload.pop("case_name")
+        payload["caseId"] = payload.pop("case_id")
         payload["investigatorName"] = payload.pop("investigator_name")
         return payload
 
@@ -91,6 +93,7 @@ class UploadRecord:
             ("sizeBytes", "size_bytes"),
             ("uploadedAt", "uploaded_at"),
             ("caseName", "case_name"),
+            ("caseId", "case_id"),
             ("investigatorName", "investigator_name"),
         ):
             if camel in data:
@@ -101,7 +104,9 @@ class UploadRecord:
 def sanitize_file_name(file_name: str | None) -> str:
     """Keep an uploaded filename local to its staging directory."""
     raw = Path(str(file_name or "upload.bin")).name.strip()
-    clean = "".join(char for char in raw if char >= " " and char not in {'"', "*", ":", "<", ">", "?", "|"})
+    clean = "".join(
+        char for char in raw if char >= " " and char not in {'"', "*", ":", "<", ">", "?", "|"}
+    )
     clean = clean.replace("\\", "_").replace("/", "_").strip(" .")
     return clean[:180] or "upload.bin"
 
@@ -186,6 +191,7 @@ class UploadService:
         content: bytes,
         session_id: str,
         case_name: str | None = None,
+        case_id: str | None = None,
         investigator_name: str | None = None,
     ) -> UploadRecord:
         """Persist an upload and immediately perform the best available processing route."""
@@ -219,6 +225,7 @@ class UploadService:
             message="File stored. No processor ran yet.",
             uploaded_at=datetime.now(UTC).isoformat(),
             case_name=case_name or None,
+            case_id=case_id or None,
             investigator_name=investigator_name or None,
             metadata={"extension": target.suffix.lower()},
             hashes=hashes,
@@ -257,7 +264,9 @@ class UploadService:
         return [self.load(upload_id) for upload_id in upload_ids]
 
     def _process(self, record: UploadRecord, upload_dir: Path) -> UploadRecord:
-        logger.debug("Routing upload for processing: uploadId={} kind={}", record.upload_id, record.kind)
+        logger.debug(
+            "Routing upload for processing: uploadId={} kind={}", record.upload_id, record.kind
+        )
         if record.kind in {"text", "database"}:
             return self._ingest_record(record, Path(record.stored_path), processor="rag")
         if record.kind == "image":
@@ -274,7 +283,9 @@ class UploadService:
             return record
 
         record.status = "stored_unsupported"
-        record.message = "Unsupported binary file type. The original file was stored but not indexed."
+        record.message = (
+            "Unsupported binary file type. The original file was stored but not indexed."
+        )
         logger.info(
             "Upload stored as unsupported binary: uploadId={} fileName={} sizeBytes={}",
             record.upload_id,
@@ -285,14 +296,14 @@ class UploadService:
 
     def _process_image(self, record: UploadRecord, upload_dir: Path) -> UploadRecord:
         image_path = Path(record.stored_path)
-        logger.info("Upload image interpretation started: uploadId={} path={}", record.upload_id, image_path)
+        logger.info(
+            "Upload image interpretation started: uploadId={} path={}", record.upload_id, image_path
+        )
         interpretation = self.vision_service.interpret_image(image_path)
         record.vision = interpretation
         record.processor = "vision"
         record.status = "vision_metadata_ready"
-        record.message = (
-            "Image metadata was extracted. Configure a small vision SLLM adapter for full visual interpretation."
-        )
+        record.message = "Image metadata was extracted. Configure a small vision SLLM adapter for full visual interpretation."
 
         derived_text = self.vision_service.to_rag_text(
             file_name=record.file_name,
@@ -303,7 +314,9 @@ class UploadService:
         derived_path.write_text(derived_text, encoding="utf-8")
         if self.knowledge_service:
             ingested = self._ingest_record(record, derived_path, processor="vision+rag")
-            ingested.status = "vision_metadata_indexed" if ingested.ingest.get("ready") else record.status
+            ingested.status = (
+                "vision_metadata_indexed" if ingested.ingest.get("ready") else record.status
+            )
             ingested.vision = interpretation
             logger.info(
                 "Upload image metadata indexed: uploadId={} ready={}",
@@ -311,14 +324,19 @@ class UploadService:
                 ingested.ingest.get("ready"),
             )
             return ingested
-        logger.warning("Upload image could not be indexed because knowledge service is unavailable: uploadId={}", record.upload_id)
+        logger.warning(
+            "Upload image could not be indexed because knowledge service is unavailable: uploadId={}",
+            record.upload_id,
+        )
         return record
 
     def _ingest_record(self, record: UploadRecord, path: Path, *, processor: str) -> UploadRecord:
         if not self.knowledge_service:
             record.status = "stored"
             record.processor = processor
-            record.message = "Knowledge service is unavailable, so the file was stored but not indexed."
+            record.message = (
+                "Knowledge service is unavailable, so the file was stored but not indexed."
+            )
             logger.warning(
                 "Upload ingest skipped because knowledge service is unavailable: uploadId={} processor={}",
                 record.upload_id,
@@ -336,6 +354,7 @@ class UploadService:
             path,
             recursive=False,
             case_name=record.case_name,
+            case_id=record.case_id,
             investigator_name=record.investigator_name,
         )
         record.processor = processor

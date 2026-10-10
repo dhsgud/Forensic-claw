@@ -10,6 +10,7 @@ only that evidence.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -24,6 +25,12 @@ from forensic_claw.forensics.report.models import (
     SectionSpec,
 )
 from forensic_claw.forensics.report.template import default_template
+from forensic_claw.forensics.trust import (
+    CLAIM_INSTRUCTION,
+    EvidenceObject,
+    HallucinationDetector,
+    is_local_endpoint,
+)
 from forensic_claw.session.scopes import normalize_scope_id
 from forensic_claw.utils.helpers import strip_think
 
@@ -76,10 +83,11 @@ class ReportGenerator:
 
     async def _render_section(self, spec: SectionSpec, context: CaseContext) -> GeneratedSection:
         if spec.kind == "llm":
-            markdown, sources, used_llm = await self._llm(spec, context)
+            markdown, sources, used_llm, checks = await self._llm(spec, context)
         else:
             markdown = self._render_data_section(spec, context)
             sources, used_llm = [], False
+            checks = []
         return GeneratedSection(
             id=spec.id,
             title=spec.title,
@@ -87,6 +95,7 @@ class ReportGenerator:
             markdown=markdown,
             sources=sources,
             used_llm=used_llm,
+            checks=checks,
         )
 
     def _render_data_section(self, spec: SectionSpec, context: CaseContext) -> str:
@@ -100,6 +109,15 @@ class ReportGenerator:
             return self._graph(context)
         if spec.kind == "signature":
             return self._signature(context)
+        if spec.kind == "method":
+            return (
+                f"등록된 원본 {len(context.sources)}건, 분석 아티팩트 {len(context.evidence)}건을 대상으로 "
+                "현재 파일 해시와 기록된 해시를 비교하였다. 미검증 근거는 모델 입력에서 제외한다.\n\n"
+                "사건별 검색 결과의 일부 구절을 발췌하고 출처·시간·경로를 검사하였다. "
+                "검색 범위·발췌 한계 때문에 근거 부재는 악성 행위 부재를 의미하지 않는다. "
+                "VERIFIED는 복수의 서로 다른 원본이 같은 원문 관찰을 뒷받침하는 출처 등급이며, "
+                "법적 증거 능력 또는 분석 정확도 보장이 아니다. 의역·추론은 FLAGGED로 검토한다."
+            )
         return self._fill(spec.body, context)
 
     def _document_info(self, context: CaseContext) -> str:
@@ -109,7 +127,10 @@ class ReportGenerator:
             ("사건명", context.case_name),
             ("분석관", context.investigator_name or "-"),
             ("분석 기관", manifest.get("organization") or "-"),
-            ("분석 도구", f"Forensic-Claw {self.app_version}" if self.app_version else "Forensic-Claw"),
+            (
+                "분석 도구",
+                f"Forensic-Claw {self.app_version}" if self.app_version else "Forensic-Claw",
+            ),
             ("분석 모델", self.model or "-"),
             ("작성일시", _now_str()),
         ]
@@ -121,11 +142,11 @@ class ReportGenerator:
         rows = context.integrity_rows()
         if not rows:
             return "등록된 증거 파일이 없어 무결성 해시 표를 생성하지 못했습니다."
-        lines = ["| 증거 | 파일 | SHA-256 | MD5 |", "| --- | --- | --- | --- |"]
+        lines = ["| 증거 | 파일 | SHA-256 | MD5 | 검증 상태 |", "| --- | --- | --- | --- | --- |"]
         for row in rows:
             lines.append(
                 f"| {_cell(row['evidenceId'])} | {_cell(row['file'])} "
-                f"| {_cell(row['sha256']) or '-'} | {_cell(row['md5']) or '-'} |"
+                f"| {_cell(row['sha256']) or '-'} | {_cell(row['md5']) or '-'} | {row['status']} |"
             )
         return "\n".join(lines)
 
@@ -159,15 +180,27 @@ class ReportGenerator:
 
     def _signature(self, context: CaseContext) -> str:
         investigator = context.investigator_name or "________"
-        return (
-            f"분석관: {investigator}　　(서명) ____________________\n\n"
-            "작성일: 20​__ . ​__ . ​__ ."
-        )
+        return f"분석관: {investigator}　　(서명) ____________________\n\n작성일: 20​__ . ​__ . ​__ ."
 
-    async def _llm(self, spec: SectionSpec, context: CaseContext) -> tuple[str, list[str], bool]:
+    async def _llm(
+        self, spec: SectionSpec, context: CaseContext
+    ) -> tuple[str, list[str], bool, list[dict[str, Any]]]:
+        endpoint = getattr(self.provider, "api_base", None)
+        if endpoint is not None and not is_local_endpoint(endpoint):
+            return (
+                "증거 외부 전송을 차단했습니다. 보고서 모델의 API 주소를 localhost/loopback으로 설정하세요.",
+                [],
+                False,
+                [],
+            )
         evidence, sources = await asyncio.to_thread(self._gather_evidence, spec, context)
         if not evidence:
-            return (spec.fallback or "해당 항목에 대한 근거를 찾지 못했습니다.", [], False)
+            return (
+                spec.fallback or "해당 항목에 대한 검증된 근거를 찾지 못했습니다.",
+                [],
+                False,
+                [],
+            )
 
         messages = [
             {"role": "system", "content": self._system_prompt(context)},
@@ -182,7 +215,12 @@ class ReportGenerator:
             )
         except Exception as exc:
             logger.warning("Report section '{}' generation failed: {}", spec.id, exc)
-            return (spec.fallback or "본문 생성 중 오류가 발생했습니다.", sources, False)
+            return (
+                "본문 생성 중 오류가 발생했습니다. 분석 미완료, 수사관 검토 필요.",
+                sources,
+                False,
+                [],
+            )
 
         if getattr(response, "finish_reason", None) == "error":
             logger.warning(
@@ -190,33 +228,44 @@ class ReportGenerator:
                 spec.id,
                 (getattr(response, "content", "") or "")[:120],
             )
-            return (spec.fallback or "보고서 본문 생성 중 오류가 발생했습니다.", sources, False)
+            return (
+                "보고서 본문 생성 중 오류가 발생했습니다. 분석 미완료, 수사관 검토 필요.",
+                sources,
+                False,
+                [],
+            )
 
         content = strip_think(response.content or "") if response and response.content else ""
         content = (content or "").strip()
         if not content:
-            return (spec.fallback or "내용을 생성하지 못했습니다.", sources, False)
+            return ("내용을 생성하지 못했습니다. 분석 미완료.", sources, False, [])
+        await asyncio.to_thread(self.knowledge_service.verify_hits, evidence)
+        content, checks = HallucinationDetector().check_response(content, evidence)
         if spec.cite and sources:
             refs = "\n".join(f"- {src}" for src in sources)
             content = f"{content}\n\n**참고 출처**\n{refs}"
-        return (content, sources, True)
+        return (content, sources, True, checks)
 
-    def _gather_evidence(self, spec: SectionSpec, context: CaseContext) -> tuple[str, list[str]]:
+    def _gather_evidence(
+        self, spec: SectionSpec, context: CaseContext
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         service = self.knowledge_service
         if service is None or not getattr(service, "enabled", False):
-            return "", []
+            return [], []
         seen: set[tuple[str, str]] = set()
-        blocks: list[str] = []
+        blocks: list[dict[str, Any]] = []
         sources: list[str] = []
         total = 0
         for query in spec.queries:
             try:
-                data = service.search(query, limit=self._SEARCH_LIMIT)
+                data = service.search(query, limit=self._SEARCH_LIMIT, case_id=context.case_id)
             except Exception as exc:
                 logger.debug("Report evidence search failed for '{}': {}", query, exc)
                 continue
             for hit in data.get("hits", []) if isinstance(data, dict) else []:
                 if not self._hit_matches_case(hit, context):
+                    continue
+                if not EvidenceObject.from_hit(hit).eligible:
                     continue
                 text = str(hit.get("text") or "").strip()
                 source = str(hit.get("sourcePath") or "").strip()
@@ -224,14 +273,15 @@ class ReportGenerator:
                 if not text or key in seen:
                     continue
                 seen.add(key)
-                block = f"- [출처: {source or 'unknown'}] {text[: self._HIT_TEXT_LIMIT]}"
-                if total + len(block) > self._MAX_EVIDENCE_CHARS:
-                    return "\n".join(blocks), sources
+                block = {**hit, "text": text[: self._HIT_TEXT_LIMIT]}
+                length = len(json.dumps(block, ensure_ascii=False))
+                if total + length > self._MAX_EVIDENCE_CHARS:
+                    return blocks, sources
                 blocks.append(block)
-                total += len(block)
+                total += length
                 if source and source not in sources:
                     sources.append(source)
-        return "\n".join(blocks), sources
+        return blocks, sources
 
     def _hit_matches_case(self, hit: dict[str, Any], context: CaseContext) -> bool:
         if not isinstance(hit, dict):
@@ -254,16 +304,16 @@ class ReportGenerator:
             "- 반드시 제공된 근거만 사용하고, 근거에 없는 사실은 지어내지 않는다.\n"
             "- 격식 있는 한국어로 간결하고 객관적으로 작성한다.\n"
             "- 추정과 사실을 구분하고, 불확실한 부분은 그 취지를 밝힌다.\n"
+            + CLAIM_INSTRUCTION
+            + "\n"
             f"- 사건명: {context.case_name}"
         )
 
-    def _user_prompt(self, spec: SectionSpec, evidence: str) -> str:
+    def _user_prompt(self, spec: SectionSpec, evidence: list[dict[str, Any]]) -> str:
         return (
             f"[섹션] {spec.title}\n"
             f"[작성 지침] {spec.prompt}\n\n"
-            f"[근거]\n{evidence}\n\n"
-            f"위 근거만 사용하여 '{spec.title}' 섹션 본문을 작성하라. "
-            "제목이나 머리말은 붙이지 말고 본문만 반환하라."
+            f"[근거 JSON]\n{json.dumps(evidence, ensure_ascii=False)}"
         )
 
     def _fill(self, text: str, context: CaseContext) -> str:

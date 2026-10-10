@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import tempfile
 from collections.abc import Iterable
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,9 @@ from urllib.parse import urlparse
 import chardet
 from loguru import logger
 
+from forensic_claw.forensics.artifacts import read_artifact
+from forensic_claw.forensics.case import CaseStore
+from forensic_claw.forensics.trust import EvidenceObject
 from forensic_claw.knowledge.base import ChunkInput, DocumentRecord
 from forensic_claw.knowledge.embeddings import create_embedder
 from forensic_claw.knowledge.factory import create_backend
@@ -36,6 +40,14 @@ _DEFAULT_PATTERNS = (
     "*.sqlite",
     "*.sqlite3",
     "*.db",
+    "*.xml",
+    "*.evtx",
+    "*.reg",
+    "SYSTEM",
+    "SOFTWARE",
+    "SAM",
+    "SECURITY",
+    "NTUSER.DAT",
 )
 _SKIP_DIRS = {
     ".git",
@@ -169,6 +181,7 @@ class KnowledgeService:
         file_globs: list[str] | None = None,
         max_files: int | None = None,
         case_name: str | None = None,
+        case_id: str | None = None,
         investigator_name: str | None = None,
     ) -> KnowledgeIngestResult:
         """Ingest a file or directory."""
@@ -210,7 +223,8 @@ class KnowledgeService:
             try:
                 one = self._ingest_file(
                     file_path,
-                    case_name=case_name,
+                    case_name=case_name or case_id,
+                    case_id=case_id,
                     investigator_name=investigator_name,
                 )
                 if one is None:
@@ -246,7 +260,9 @@ class KnowledgeService:
         )
         return result
 
-    def search(self, query: str, *, limit: int = 8, include_graph: bool = True) -> dict[str, Any]:
+    def search(
+        self, query: str, *, limit: int = 8, include_graph: bool = True, case_id: str | None = None
+    ) -> dict[str, Any]:
         """Retrieve RAG chunks and graph hints for a question."""
         query_embedding = self.embedder.embed_one(query) if self.embedder.ready else None
         logger.debug(
@@ -262,7 +278,33 @@ class KnowledgeService:
             query_embedding=query_embedding,
             limit=limit,
             include_graph=include_graph,
+            case_id=case_id,
         )
+        valid, rejected = self.verify_hits(data.get("hits", []))
+        if case_id and include_graph:
+            nodes, edges = {}, {}
+            for document_id in {hit["metadata"].get("documentId") for hit in valid}:
+                if not document_id:
+                    continue
+                graph = self.backend.graph_for_document(document_id)
+                for node in graph.get("entities", []):
+                    nodes[node["id"]] = {
+                        "id": node["id"],
+                        "label": node["value"],
+                        "kind": node["kind"],
+                        "metadata": node["metadata"],
+                    }
+                for edge in graph.get("relationships", []):
+                    edges[edge["id"]] = {
+                        "id": edge["id"],
+                        "source": edge["source_id"],
+                        "target": edge["target_id"],
+                        "type": edge["type"],
+                        "label": edge["type"],
+                        "metadata": edge["metadata"],
+                    }
+            data["graph"] = list(nodes.values())
+            data["graphView"] = {"nodes": list(nodes.values()), "edges": list(edges.values())}
         logger.debug(
             "Knowledge search completed: hits={} graphItems={} graphNodes={} graphEdges={}",
             len(data.get("hits", [])),
@@ -274,10 +316,59 @@ class KnowledgeService:
             "query": query,
             "backend": self.backend.name,
             "vector": query_embedding is not None,
-            "hits": data.get("hits", []),
+            "hits": valid,
+            "rejected": rejected,
             "graph": data.get("graph", []),
             "graphView": data.get("graphView", {"nodes": [], "edges": []}),
         }
+
+    def verify_hits(
+        self, hits: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Recheck current source bytes, including sidecars, before publishing claims."""
+        valid, rejected = [], []
+        hashes = {}
+        for hit in hits:
+            source = hit["sourcePath"]
+            if source not in hashes:
+                try:
+                    hashes[source] = self._sha256(Path(source))
+                except OSError:
+                    hashes[source] = None
+            hit["hash_verified"] = bool(hit.get("sha256")) and hashes[source] == hit.get("sha256")
+            components = hit.get("metadata", {}).get("hashes", {})
+            if not isinstance(components, dict):
+                hit["hash_verified"] = False
+                components = {}
+            for name, expected in components.items():
+                if not isinstance(expected, dict):
+                    hit["hash_verified"] = False
+                    break
+                component = Path(source).parent / name
+                if not component.resolve().is_relative_to(Path(source).parent.resolve()):
+                    hit["hash_verified"] = False
+                    break
+                component_key = str(component)
+                if component_key not in hashes:
+                    try:
+                        hashes[component_key] = self._sha256(component)
+                    except OSError:
+                        hashes[component_key] = None
+                if hashes[component_key] != expected.get("sha256"):
+                    hit["hash_verified"] = False
+            item = EvidenceObject.from_hit(hit)
+            if item.eligible:
+                valid.append(hit)
+            else:
+                rejected.append(
+                    {
+                        "evidenceId": item.id,
+                        "sourcePath": item.source,
+                        "grade": "UNVERIFIED" if not item.hash_verified else "FLAGGED",
+                        "issues": item.issues,
+                    }
+                )
+        return valid, rejected
 
     def discover_chrome_history(self, *, max_files: int = 20) -> list[Path]:
         """Find Chrome History SQLite databases in likely local locations."""
@@ -301,6 +392,7 @@ class KnowledgeService:
         self,
         *,
         case_name: str | None = None,
+        case_id: str | None = None,
         investigator_name: str | None = None,
         max_files: int = 20,
     ) -> KnowledgeIngestResult:
@@ -324,6 +416,7 @@ class KnowledgeService:
                 path,
                 recursive=False,
                 case_name=case_name,
+                case_id=case_id,
                 investigator_name=investigator_name,
             )
             result.scanned_files += one.scanned_files
@@ -356,12 +449,7 @@ class KnowledgeService:
             user_profile = os.environ.get("USERPROFILE")
             if user_profile:
                 roots.append(
-                    Path(user_profile)
-                    / "AppData"
-                    / "Local"
-                    / "Google"
-                    / "Chrome"
-                    / "User Data"
+                    Path(user_profile) / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
                 )
         roots.append(self.workspace)
 
@@ -434,6 +522,7 @@ class KnowledgeService:
         *,
         case_name: str | None,
         investigator_name: str | None,
+        case_id: str | None = None,
     ) -> dict[str, Any] | None:
         size = path.stat().st_size
         max_size = int(getattr(self.config, "max_file_bytes", 256 * 1024 * 1024))
@@ -444,29 +533,40 @@ class KnowledgeService:
             raise ValueError(f"file exceeds maxFileBytes ({size} > {max_size})")
 
         logger.debug("Knowledge file ingest started: path={} size={}", path, size)
+        provenance = {"timestamp": datetime.now(UTC).isoformat(), "timestampKind": "acquired_at"}
+        if case_name:
+            path, provenance = CaseStore(self.workspace).acquire_source(
+                path, case_name=case_name, investigator_name=investigator_name, case_id=case_id
+            )
+        baseline = self._sha256(path)
         if self._is_chrome_history(path):
             logger.info("Knowledge file detected as Chrome History database: {}", path)
             return self._ingest_chrome_history(
                 path,
                 case_name=case_name,
                 investigator_name=investigator_name,
+                provenance=provenance,
             )
 
-        text_chunks = list(self._text_chunks(path))
+        parsed = read_artifact(path)
+        text_chunks = parsed if parsed is not None else list(self._text_chunks(path))
         if not text_chunks:
             logger.debug("Knowledge file has no ingestible text chunks: {}", path)
             return None
+        if self._sha256(path) != baseline:
+            raise ValueError("Evidence changed during parsing")
 
         document = self.backend.replace_document(
             source_path=str(path),
-            kind="text_log",
-            sha256=self._sha256(path),
+            kind="windows_artifact" if parsed else "text_log",
+            sha256=baseline,
             size_bytes=size,
             mtime=path.stat().st_mtime,
             metadata={
                 "caseName": case_name,
                 "investigatorName": investigator_name,
                 "filename": path.name,
+                **provenance,
             },
         )
         embedded_chunks, embedded_count = self._embed_chunks(text_chunks)
@@ -475,11 +575,14 @@ class KnowledgeService:
             document,
             (text for text, _metadata in text_chunks),
         )
+        if parsed:
+            self._index_event_relationships(document, text_chunks)
         self._add_case_graph(
             document,
             case_name=case_name,
             investigator_name=investigator_name,
         )
+        self._register_case_document(document)
         logger.debug(
             "Text file indexed locally: documentId={} chunks={} embedded={} entities={} relationships={}",
             document.id,
@@ -511,7 +614,10 @@ class KnowledgeService:
                     line_start = line_no
                 buffer += line
                 if len(buffer) >= chunk_chars:
-                    yield buffer, {"lineStart": line_start, "lineEnd": line_no, "encoding": encoding}
+                    yield (
+                        buffer,
+                        {"lineStart": line_start, "lineEnd": line_no, "encoding": encoding},
+                    )
                     buffer = buffer[-overlap:] if overlap > 0 else ""
                     line_start = line_no
             if buffer.strip():
@@ -579,8 +685,10 @@ class KnowledgeService:
         *,
         case_name: str | None,
         investigator_name: str | None,
+        provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         max_rows = int(getattr(self.config, "max_chrome_rows", 10000))
+        baseline = self._sha256(path)
         logger.info("Chrome History ingest started: path={} maxRows={}", path, max_rows)
         temp = self._copy_for_sqlite(path)
         rows: list[dict[str, Any]] = []
@@ -592,16 +700,18 @@ class KnowledgeService:
                 """
                 SELECT
                     urls.id AS url_id,
+                    visits.id AS visit_id,
+                    visits.from_visit AS from_visit,
+                    visits.transition AS transition,
                     urls.url AS url,
                     urls.title AS title,
                     urls.visit_count AS visit_count,
                     urls.last_visit_time AS last_visit_time,
-                    MAX(visits.visit_time) AS latest_visit_time,
-                    COUNT(visits.id) AS observed_visits
+                    visits.visit_time AS latest_visit_time,
+                    (SELECT COUNT(*) FROM visits v WHERE v.url=urls.id) AS observed_visits
                 FROM urls
                 LEFT JOIN visits ON visits.url = urls.id
-                GROUP BY urls.id, urls.url, urls.title, urls.visit_count, urls.last_visit_time
-                ORDER BY COALESCE(MAX(visits.visit_time), urls.last_visit_time) DESC
+                ORDER BY COALESCE(visits.visit_time, urls.last_visit_time) DESC
                 LIMIT ?
                 """,
                 (max_rows,),
@@ -612,10 +722,12 @@ class KnowledgeService:
                 conn.close()
             temp.unlink(missing_ok=True)
 
+        if self._sha256(path) != baseline:
+            raise ValueError("Chrome History changed during parsing")
         document = self.backend.replace_document(
             source_path=str(path),
             kind="chrome_history",
-            sha256=self._sha256(path),
+            sha256=baseline,
             size_bytes=path.stat().st_size,
             mtime=path.stat().st_mtime,
             metadata={
@@ -623,6 +735,7 @@ class KnowledgeService:
                 "investigatorName": investigator_name,
                 "filename": path.name,
                 "rows": len(rows),
+                **(provenance or {}),
             },
         )
         chunks: list[tuple[str, dict[str, Any]]] = []
@@ -635,6 +748,7 @@ class KnowledgeService:
                     f"Visit Count: {row.get('visit_count') or 0}",
                     f"Observed Visits: {row.get('observed_visits') or 0}",
                     f"Latest Visit UTC: {latest or 'unknown'}",
+                    f"Visit ID: {row.get('visit_id')}",
                 ]
             )
             chunks.append(
@@ -643,6 +757,7 @@ class KnowledgeService:
                     {
                         "rowIndex": index,
                         "urlId": row.get("url_id"),
+                        "visitId": row.get("visit_id"),
                         "latestVisitUtc": latest,
                     },
                 )
@@ -656,6 +771,7 @@ class KnowledgeService:
             case_name=case_name,
             investigator_name=investigator_name,
         )
+        self._register_case_document(document)
         logger.info(
             "Chrome History ingest finished: documentId={} rows={} chunks={} embedded={} "
             "entities={} relationships={}",
@@ -681,8 +797,20 @@ class KnowledgeService:
         fd, name = tempfile.mkstemp(suffix=path.suffix or ".sqlite", dir=temp_dir)
         os.close(fd)
         target = Path(name)
-        shutil.copy2(path, target)
+        try:
+            with closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as original:
+                with closing(sqlite3.connect(target)) as copied:
+                    original.backup(copied)
+        except sqlite3.DatabaseError:
+            shutil.copy2(path, target)
         return target
+
+    def _register_case_document(self, document: DocumentRecord) -> None:
+        CaseStore(self.workspace).register_document(
+            document,
+            self.backend.chunks_for_document(document.id),
+            self.backend.graph_for_document(document.id),
+        )
 
     @staticmethod
     def _chrome_time(value: Any) -> str | None:
@@ -776,13 +904,7 @@ class KnowledgeService:
             url_id = self.backend.upsert_entity(
                 kind="URL",
                 value=url,
-                metadata={
-                    "title": row.get("title") or "",
-                    "visitCount": row.get("visit_count") or 0,
-                    "latestVisitUtc": self._chrome_time(
-                        row.get("latest_visit_time") or row.get("last_visit_time")
-                    ),
-                },
+                metadata={},
             )
             self.backend.upsert_relationship(
                 source_id=source_id,
@@ -805,6 +927,44 @@ class KnowledgeService:
                 rel_count += 1
         return {"entities": entity_count, "relationships": rel_count}
 
+    def _index_event_relationships(
+        self, document: DocumentRecord, chunks: list[tuple[str, dict[str, Any]]]
+    ) -> None:
+        for _, metadata in chunks:
+            values = metadata.get("eventValues", {})
+            provider, event_id = values.get("Provider"), values.get("EventID")
+            target_kind, target_value, rel_type = None, None, None
+            if provider == "Microsoft-Windows-Sysmon":
+                rule = {
+                    "3": ("IP", "DestinationIp", "CONNECTED_TO"),
+                    "11": ("FilePath", "TargetFilename", "CREATED_FILE"),
+                    "13": ("RegistryKey", "TargetObject", "SET_REGISTRY_VALUE"),
+                }.get(event_id)
+                if rule:
+                    target_kind, field, rel_type = rule
+                    target_value = values.get(field)
+            if not target_value or not values.get("Image"):
+                continue
+            process = values.get("ProcessGuid") or f"record:{metadata.get('recordId')}"
+            process_id = self.backend.upsert_entity(
+                kind="Process",
+                value=f"{document.source_path}#{process}",
+                metadata={"image": values["Image"]},
+            )
+            target_id = self.backend.upsert_entity(kind=target_kind, value=target_value)
+            self.backend.upsert_relationship(
+                source_id=process_id,
+                target_id=target_id,
+                rel_type=rel_type,
+                document_id=document.id,
+                metadata={
+                    "basis": "recorded_event",
+                    "recordId": metadata.get("recordId"),
+                    "timestamp": metadata.get("eventTimestamp"),
+                    "sourceId": document.metadata.get("sourceId"),
+                },
+            )
+
     @staticmethod
     def _extract_entities(text: str) -> Iterable[tuple[str, str]]:
         yielded: set[tuple[str, str]] = set()
@@ -818,8 +978,11 @@ class KnowledgeService:
         ):
             for value in regex.findall(text):
                 clean = value.strip(".,;:)]}\"'")
-                if kind == "Domain" and clean.lower().startswith(("http.", "https.")):
-                    continue
+                if kind == "Domain":
+                    if clean.lower().startswith(("http.", "https.")) or _EXECUTABLE_RE.fullmatch(
+                        clean
+                    ):
+                        continue
                 key = (kind, clean.lower())
                 if clean and key not in yielded:
                     yielded.add(key)
@@ -837,9 +1000,7 @@ class KnowledgeService:
     def result_to_text(result: KnowledgeIngestResult) -> str:
         """Format an ingest result for tool output."""
         if not result.ok:
-            return "Knowledge ingest failed.\n" + "\n".join(
-                f"- {error}" for error in result.errors
-            )
+            return "Knowledge ingest failed.\n" + "\n".join(f"- {error}" for error in result.errors)
         lines = [
             "Knowledge ingest ready."
             if result.ready

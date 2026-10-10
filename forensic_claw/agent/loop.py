@@ -223,6 +223,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             thinking_language=thinking_language,
             response_language=response_language,
+            knowledge_service=self.knowledge_service,
         )
 
         self._running = False
@@ -267,17 +268,23 @@ class AgentLoop:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-        self.tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read))
+        self.tools.register(
+            ReadFileTool(
+                workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read
+            )
+        )
         self.tools.register(HashVerifyTool(workspace=self.workspace, allowed_dir=allowed_dir))
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         if self.exec_config.enable:
-            self.tools.register(ExecTool(
-                working_dir=str(self.workspace),
-                timeout=self.exec_config.timeout,
-                restrict_to_workspace=self.restrict_to_workspace,
-                path_append=self.exec_config.path_append,
-            ))
+            self.tools.register(
+                ExecTool(
+                    working_dir=str(self.workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=self.restrict_to_workspace,
+                    path_append=self.exec_config.path_append,
+                )
+            )
         self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         if sys.platform == "win32":
@@ -306,10 +313,12 @@ class AgentLoop:
                     allowed_dir=allowed_dir,
                 )
             )
-        self.tools.register(MessageTool(
-            send_callback=self.bus.publish_outbound,
-            content_transform=self._normalize_user_facing_text,
-        ))
+        self.tools.register(
+            MessageTool(
+                send_callback=self.bus.publish_outbound,
+                content_transform=self._normalize_user_facing_text,
+            )
+        )
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(
@@ -322,6 +331,7 @@ class AgentLoop:
             return
         self._mcp_connecting = True
         from forensic_claw.agent.tools.mcp import connect_mcp_servers
+
         try:
             self._mcp_stack = AsyncExitStack()
             await self._mcp_stack.__aenter__()
@@ -350,6 +360,9 @@ class AgentLoop:
         if tool := self.tools.get("message"):
             if hasattr(tool, "set_context"):
                 tool.set_context(channel, chat_id, message_id)
+        for name in ("knowledge_ingest", "knowledge_search", "knowledge_status"):
+            if tool := self.tools.get(name):
+                tool.set_context(metadata or {})
         if tool := self.tools.get("spawn"):
             if hasattr(tool, "set_context"):
                 tool.set_context(
@@ -368,17 +381,20 @@ class AgentLoop:
         if not text:
             return None
         from forensic_claw.utils.helpers import strip_think
+
         return strip_think(text) or None
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
+
         def _fmt(tc):
             args = (tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments) or {}
             val = next(iter(args.values()), None) if isinstance(args, dict) else None
             if not isinstance(val, str):
                 return tc.name
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
     @staticmethod
@@ -452,8 +468,11 @@ class AgentLoop:
     def _count_hangul(text: str) -> int:
         """Count Hangul syllables/jamo in text."""
         return sum(
-            1 for ch in text
-            if ("\uac00" <= ch <= "\ud7a3") or ("\u1100" <= ch <= "\u11ff") or ("\u3130" <= ch <= "\u318f")
+            1
+            for ch in text
+            if ("\uac00" <= ch <= "\ud7a3")
+            or ("\u1100" <= ch <= "\u11ff")
+            or ("\u3130" <= ch <= "\u318f")
         )
 
     @staticmethod
@@ -481,7 +500,11 @@ class AgentLoop:
         if not self._needs_response_language_normalization(text):
             return text
 
-        policy = "한국어" if self.response_language.lower() in {"ko", "korean"} else self.response_language
+        policy = (
+            "한국어"
+            if self.response_language.lower() in {"ko", "korean"}
+            else self.response_language
+        )
         prompt = (
             f"Rewrite the assistant draft into natural {policy}. "
             "Preserve facts, markdown structure, bulleting, file paths, command names, hashes, code blocks, "
@@ -523,6 +546,49 @@ class AgentLoop:
         ``resuming=False`` means this is the final response.
         """
         messages = initial_messages
+        from forensic_claw.forensics.trust import (
+            CLAIM_INSTRUCTION,
+            EVIDENCE_TOOLS,
+            HallucinationDetector,
+            is_local_endpoint,
+        )
+        from forensic_claw.session.scopes import parse_scoped_session_key
+
+        scope = (metadata or {}).get("case_id") or (metadata or {}).get("caseId")
+        scope = scope or (parse_scoped_session_key(session_key).case_id if session_key else None)
+        if scope:
+            metadata = {**(metadata or {}), "case_id": scope}
+        evidence_mode = bool(scope and self.knowledge_service)
+        endpoint = getattr(self.provider, "api_base", None)
+        if evidence_mode and endpoint is not None and not is_local_endpoint(endpoint):
+            text = "증거 외부 전송을 차단했습니다. 분석 모델의 API 주소를 localhost/loopback으로 설정하세요."
+            return text, [], [*messages, {"role": "assistant", "content": text}]
+        grounded_hits = []
+        if evidence_mode:
+            query = next(
+                (
+                    m.get("content", "")
+                    for m in reversed(messages)
+                    if m.get("role") == "user" and isinstance(m.get("content"), str)
+                ),
+                "",
+            )
+            if query.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                query = query.split("\n\n", 1)[-1]
+            user_query = (metadata or {}).get("user_query")
+            if isinstance(user_query, str) and user_query.strip():
+                query = user_query
+            data = await asyncio.to_thread(self.knowledge_service.search, query, case_id=scope)
+            grounded_hits.extend(data.get("hits", []))
+            messages = [
+                *messages,
+                {"role": "system", "content": CLAIM_INSTRUCTION},
+                {
+                    "role": "user",
+                    "content": "[검증된 사건 근거 JSON]\n"
+                    + json.dumps(grounded_hits, ensure_ascii=False),
+                },
+            ]
         iteration = 0
         final_content = None
         tools_used: list[str] = []
@@ -536,13 +602,14 @@ class AgentLoop:
         async def _filtered_stream(delta: str) -> None:
             nonlocal _stream_buf
             from forensic_claw.utils.helpers import strip_think
+
             prev_clean = strip_think(_stream_buf)
             prev_think = extract_think(_stream_buf) or ""
             _stream_buf += delta
             new_clean = strip_think(_stream_buf)
             new_think = extract_think(_stream_buf) or ""
-            incremental = new_clean[len(prev_clean):]
-            thinking_delta = new_think[len(prev_think):]
+            incremental = new_clean[len(prev_clean) :]
+            thinking_delta = new_think[len(prev_think) :]
             if thinking_delta and channel == "webui" and on_progress:
                 await on_progress(thinking_delta)
             if incremental and _raw_stream:
@@ -558,7 +625,7 @@ class AgentLoop:
                 return
 
             if normalized.startswith(_reasoning_buf):
-                incremental = normalized[len(_reasoning_buf):]
+                incremental = normalized[len(_reasoning_buf) :]
                 _reasoning_buf = normalized
             else:
                 incremental = normalized
@@ -571,10 +638,15 @@ class AgentLoop:
             iteration += 1
 
             tool_defs = self.tools.get_definitions()
+            if evidence_mode:
+                tool_defs = [
+                    tool for tool in tool_defs if tool["function"]["name"] in EVIDENCE_TOOLS
+                ]
 
             use_stream = on_stream is not None and (
                 not self.enforce_response_language or channel == "webui"
             )
+            use_stream = use_stream and not evidence_mode
 
             outgoing = self._provider_messages(messages, tool_defs)
             if use_stream:
@@ -604,7 +676,7 @@ class AgentLoop:
                     _stream_buf = ""
 
                 if on_progress:
-                    if not on_stream:
+                    if not on_stream and not evidence_mode:
                         thought = self._strip_think(response.content)
                         if thought:
                             await on_progress(thought)
@@ -612,13 +684,12 @@ class AgentLoop:
                     tool_hint = self._strip_think(tool_hint)
                     await on_progress(tool_hint, tool_hint=True)
 
-                tool_call_dicts = [
-                    tc.to_openai_tool_call()
-                    for tc in response.tool_calls
-                ]
+                tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 reasoning_text = response.reasoning_content or extract_think(response.content)
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
+                    messages,
+                    response.content,
+                    tool_call_dicts,
                     reasoning_content=reasoning_text,
                     thinking_blocks=response.thinking_blocks,
                 )
@@ -627,16 +698,6 @@ class AgentLoop:
                     tools_used.append(tc.name)
                     args_str = json.dumps(tc.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tc.name, args_str[:200])
-
-                # Re-bind tool context right before execution so that
-                # concurrent sessions don't clobber each other's routing.
-                self._set_tool_context(
-                    channel,
-                    chat_id,
-                    message_id,
-                    session_key=session_key,
-                    metadata=metadata,
-                )
 
                 exec_tool = self.tools.get("exec")
                 exec_started_at: dict[str, float] = {}
@@ -666,10 +727,18 @@ class AgentLoop:
                 # independent calls in a single response on purpose.
                 # return_exceptions=True ensures all results are collected
                 # even if one tool is cancelled or raises BaseException.
-                results = await asyncio.gather(*(
-                    self.tools.execute(tc.name, tc.arguments)
-                    for tc in response.tool_calls
-                ), return_exceptions=True)
+                async def execute_tool(tc):
+                    if evidence_mode and tc.name not in EVIDENCE_TOOLS:
+                        return "Error: only local evidence tools are allowed during case analysis"
+                    self._set_tool_context(
+                        channel, chat_id, message_id, session_key=session_key, metadata=metadata
+                    )
+                    return await self.tools.execute(tc.name, tc.arguments)
+
+                results = await asyncio.gather(
+                    *(execute_tool(tc) for tc in response.tool_calls),
+                    return_exceptions=True,
+                )
 
                 for tool_call, result in zip(response.tool_calls, results):
                     if on_shell_trace and tool_call.name == "exec":
@@ -693,22 +762,50 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    if tool_call.name == "knowledge_search" and isinstance(result, str):
+                        try:
+                            grounded_hits.extend(json.loads(result).get("hits", []))
+                        except (ValueError, AttributeError):
+                            pass
+                        if not evidence_mode:
+                            evidence_mode = True
+                            messages.append({"role": "system", "content": CLAIM_INSTRUCTION})
             else:
                 if use_stream and on_stream_end:
                     await on_stream_end(resuming=False)
                     _stream_buf = ""
 
                 clean = self._strip_think(response.content)
-                clean = await self._normalize_user_facing_text(clean or "") if clean else clean
+                clean = (
+                    await self._normalize_user_facing_text(clean or "")
+                    if clean and not evidence_mode
+                    else clean
+                )
                 if response.finish_reason == "error":
                     logger.error("LLM returned error: {}", (clean or "")[:200])
-                    final_content = clean or "Sorry, I encountered an error calling the AI model."
+                    final_content = (
+                        "모델 분석에 실패했습니다. 분석 미완료, 추가 검토 필요."
+                        if evidence_mode
+                        else clean or "Sorry, I encountered an error calling the AI model."
+                    )
                     break
+                if evidence_mode:
+                    if grounded_hits:
+                        await asyncio.to_thread(self.knowledge_service.verify_hits, grounded_hits)
+                        clean, checks = HallucinationDetector().check_response(
+                            clean or "", grounded_hits
+                        )
+                    else:
+                        clean = "검증된 사건 근거가 없어 분석 결과를 생성하지 않았습니다. 자료를 수집·인덱싱한 뒤 다시 질의하세요."
                 reasoning_text = response.reasoning_content or extract_think(response.content)
                 messages = self.context.add_assistant_message(
-                    messages, clean, reasoning_content=reasoning_text,
+                    messages,
+                    clean,
+                    reasoning_content=reasoning_text,
                     thinking_blocks=response.thinking_blocks,
                 )
+                if evidence_mode and grounded_hits:
+                    messages[-1]["trust_checks"] = checks
                 final_content = clean
                 break
 
@@ -771,7 +868,13 @@ class AgentLoop:
                 continue
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(msg.session_key, []).append(task)
-            task.add_done_callback(lambda t, k=msg.session_key: self._active_tasks.get(k, []) and self._active_tasks[k].remove(t) if t in self._active_tasks.get(k, []) else None)
+            task.add_done_callback(
+                lambda t, k=msg.session_key: (
+                    self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                    if t in self._active_tasks.get(k, [])
+                    else None
+                )
+            )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent."""
@@ -794,31 +897,39 @@ class AgentLoop:
                         nonlocal did_stream_output, last_stream_id
                         did_stream_output = True
                         last_stream_id = _current_stream_id()
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content=delta,
-                            metadata={
-                                "_stream_delta": True,
-                                "_stream_id": _current_stream_id(),
-                            },
-                        ))
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content=delta,
+                                metadata={
+                                    "_stream_delta": True,
+                                    "_stream_id": _current_stream_id(),
+                                },
+                            )
+                        )
 
                     async def on_stream_end(*, resuming: bool = False) -> None:
                         nonlocal stream_segment, last_stream_id
                         last_stream_id = _current_stream_id()
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="",
-                            metadata={
-                                "_stream_end": True,
-                                "_resuming": resuming,
-                                "_stream_id": _current_stream_id(),
-                            },
-                        ))
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata={
+                                    "_stream_end": True,
+                                    "_resuming": resuming,
+                                    "_stream_id": _current_stream_id(),
+                                },
+                            )
+                        )
                         stream_segment += 1
 
                 response = await self._process_message(
-                    msg, on_stream=on_stream, on_stream_end=on_stream_end,
+                    msg,
+                    on_stream=on_stream,
+                    on_stream_end=on_stream_end,
                 )
                 if response is not None:
                     if did_stream_output:
@@ -828,19 +939,26 @@ class AgentLoop:
                             response.metadata["_streamed"] = True
                     await self.bus.publish_outbound(response)
                 elif msg.channel == "cli":
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="", metadata=msg.metadata or {},
-                    ))
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="",
+                            metadata=msg.metadata or {},
+                        )
+                    )
             except asyncio.CancelledError:
                 logger.info("Task cancelled for session {}", msg.session_key)
                 raise
             except Exception:
                 logger.exception("Error processing message for session {}", msg.session_key)
-                await self.bus.publish_outbound(OutboundMessage(
-                    channel=msg.channel, chat_id=msg.chat_id,
-                    content="Sorry, I encountered an error.",
-                ))
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="Sorry, I encountered an error.",
+                    )
+                )
 
     async def close_mcp(self) -> None:
         """Drain pending background tasks, then close MCP connections."""
@@ -879,7 +997,9 @@ class AgentLoop:
 
         lowered = raw.lower()
         has_log_target = any(token in lowered for token in cls._AUTO_BACKGROUND_LOG_PATTERNS)
-        has_analysis_intent = any(token in lowered for token in cls._AUTO_BACKGROUND_ANALYSIS_PATTERNS)
+        has_analysis_intent = any(
+            token in lowered for token in cls._AUTO_BACKGROUND_ANALYSIS_PATTERNS
+        )
         has_narrow_scope = any(token in lowered for token in cls._AUTO_BACKGROUND_NARROW_PATTERNS)
         return has_log_target and has_analysis_intent and not has_narrow_scope
 
@@ -891,7 +1011,9 @@ class AgentLoop:
         if metadata.get("case_id") or metadata.get("caseId"):
             scope_bits.append(f"case={metadata.get('case_id') or metadata.get('caseId')}")
         if metadata.get("artifact_id") or metadata.get("artifactId"):
-            scope_bits.append(f"artifact={metadata.get('artifact_id') or metadata.get('artifactId')}")
+            scope_bits.append(
+                f"artifact={metadata.get('artifact_id') or metadata.get('artifactId')}"
+            )
         scope_text = f"Scope: {', '.join(scope_bits)}\n" if scope_bits else ""
 
         return (
@@ -927,6 +1049,8 @@ class AgentLoop:
 
     async def _auto_prepare_chrome_history(self, msg: InboundMessage) -> str | None:
         """Discover and ingest Chrome History before the LLM answers."""
+        from forensic_claw.session.scopes import parse_scoped_session_key
+
         if not self.knowledge_service or not self.knowledge_service.enabled:
             return None
 
@@ -934,6 +1058,9 @@ class AgentLoop:
         result = await asyncio.to_thread(
             self.knowledge_service.prepare_chrome_history,
             case_name=metadata.get("case_name") or metadata.get("caseName"),
+            case_id=metadata.get("case_id")
+            or metadata.get("caseId")
+            or parse_scoped_session_key(msg.session_key).case_id,
             investigator_name=metadata.get("investigator_name") or metadata.get("investigatorName"),
         )
         return "Auto Chrome History preparation:\n" + self.knowledge_service.result_to_text(result)
@@ -963,7 +1090,7 @@ class AgentLoop:
             return False
 
         try:
-            chunk = session.messages[session.last_consolidated:]
+            chunk = session.messages[session.last_consolidated :]
             if chunk:
                 await self.memory_consolidator.consolidate_messages(chunk)
         except Exception as exc:
@@ -1037,11 +1164,18 @@ class AgentLoop:
         """Process a single inbound message and return the response."""
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
-            channel, chat_id = (msg.chat_id.split(":", 1) if ":" in msg.chat_id
-                                else ("cli", msg.chat_id))
+            channel, chat_id = (
+                msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
+            )
             logger.info("Processing system message from {}", msg.sender_id)
             key = session_key or msg.session_key_override or f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
+            if msg.metadata.get("trust_checked") and msg.sender_id == "subagent":
+                session.add_message("assistant", msg.content)
+                self.sessions.save(session)
+                return OutboundMessage(
+                    channel=channel, chat_id=chat_id, content=msg.content, metadata=msg.metadata
+                )
             shell_trace = self._build_shell_trace_callback(
                 channel=channel,
                 chat_id=chat_id,
@@ -1059,12 +1193,16 @@ class AgentLoop:
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
             messages = self.context.build_messages(
                 history=history,
-                current_message=msg.content, channel=channel, chat_id=chat_id,
+                current_message=msg.content,
+                channel=channel,
+                chat_id=chat_id,
                 current_role=current_role,
                 metadata=msg.metadata,
             )
             final_content, _, all_msgs = await self._run_agent_loop(
-                messages, channel=channel, chat_id=chat_id,
+                messages,
+                channel=channel,
+                chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
                 session_key=key,
                 metadata=msg.metadata,
@@ -1167,7 +1305,8 @@ class AgentLoop:
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
-            channel=msg.channel, chat_id=msg.chat_id,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
             metadata=msg.metadata,
         )
 
@@ -1175,9 +1314,14 @@ class AgentLoop:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
-            ))
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=content,
+                    metadata=meta,
+                )
+            )
 
         final_content, _, all_msgs = await self._run_agent_loop(
             initial_messages,
@@ -1185,7 +1329,8 @@ class AgentLoop:
             on_stream=on_stream,
             on_stream_end=on_stream_end,
             on_shell_trace=shell_trace,
-            channel=msg.channel, chat_id=msg.chat_id,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
             session_key=key,
             metadata=msg.metadata,
@@ -1221,7 +1366,9 @@ class AgentLoop:
         if graph_views:
             meta["graph_views"] = graph_views
         return OutboundMessage(
-            channel=msg.channel, chat_id=msg.chat_id, content=final_content,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=final_content,
             metadata=meta,
         )
 
@@ -1248,7 +1395,12 @@ class AgentLoop:
         for message in messages:
             if message.get("role") == "tool" and isinstance(message.get("content"), str):
                 trimmed.append(
-                    {**message, "content": self._compact_tool_content(message.get("name"), message["content"])}
+                    {
+                        **message,
+                        "content": self._compact_tool_content(
+                            message.get("name"), message["content"]
+                        ),
+                    }
                 )
             else:
                 trimmed.append(message)
@@ -1258,7 +1410,9 @@ class AgentLoop:
         """Token ceiling for an outgoing prompt, reserving room for the reply."""
         if self.context_window_tokens <= 0:
             return 0
-        max_completion = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 0) or 0)
+        max_completion = int(
+            getattr(getattr(self.provider, "generation", None), "max_tokens", 0) or 0
+        )
         return self.context_window_tokens - max_completion - self._BUDGET_SAFETY_BUFFER
 
     @staticmethod
@@ -1306,7 +1460,7 @@ class AgentLoop:
             return messages  # nothing safe to anchor on; leave as-is
 
         question = result[last_user]
-        groups = self._group_messages(result[last_user + 1:])
+        groups = self._group_messages(result[last_user + 1 :])
 
         # Drop oldest groups (prior history already excluded by anchoring on
         # the last user message) until the prompt fits the budget.
@@ -1378,17 +1532,16 @@ class AgentLoop:
             ):
                 continue
 
-            if (
-                block.get("type") == "image_url"
-                and block.get("image_url", {}).get("url", "").startswith("data:image/")
-            ):
+            if block.get("type") == "image_url" and block.get("image_url", {}).get(
+                "url", ""
+            ).startswith("data:image/"):
                 filtered.append(self._image_placeholder(block))
                 continue
 
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 text = block["text"]
                 if truncate_text and len(text) > self._TOOL_RESULT_MAX_CHARS:
-                    text = text[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+                    text = text[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
                 filtered.append({**block, "text": text})
                 continue
 
@@ -1399,6 +1552,7 @@ class AgentLoop:
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
+
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
@@ -1406,14 +1560,16 @@ class AgentLoop:
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":
                 if isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                    entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+                    entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
                 elif isinstance(content, list):
                     filtered = self._sanitize_persisted_blocks(content, truncate_text=True)
                     if not filtered:
                         continue
                     entry["content"] = filtered
             elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                if isinstance(content, str) and content.startswith(
+                    ContextBuilder._RUNTIME_CONTEXT_TAG
+                ):
                     # Strip the runtime-context prefix, keep only the user text.
                     parts = content.split("\n\n", 1)
                     if len(parts) > 1 and parts[1].strip():
@@ -1498,17 +1654,42 @@ class AgentLoop:
     @classmethod
     def _normalize_graph_view(cls, payload: dict[str, Any]) -> dict[str, Any] | None:
         raw_view = payload.get("graphView") if isinstance(payload.get("graphView"), dict) else {}
-        raw_nodes = raw_view.get("nodes") or raw_view.get("entities") or payload.get("nodes") or payload.get("entities") or payload.get("graph") or []
-        raw_edges = raw_view.get("edges") or raw_view.get("relationships") or payload.get("edges") or payload.get("relationships") or []
-        nodes = [node for node in (cls._graph_node(item) for item in cls._as_list(raw_nodes)) if node]
-        edges = [edge for edge in (cls._graph_edge(item) for item in cls._as_list(raw_edges)) if edge]
+        raw_nodes = (
+            raw_view.get("nodes")
+            or raw_view.get("entities")
+            or payload.get("nodes")
+            or payload.get("entities")
+            or payload.get("graph")
+            or []
+        )
+        raw_edges = (
+            raw_view.get("edges")
+            or raw_view.get("relationships")
+            or payload.get("edges")
+            or payload.get("relationships")
+            or []
+        )
+        nodes = [
+            node for node in (cls._graph_node(item) for item in cls._as_list(raw_nodes)) if node
+        ]
+        edges = [
+            edge for edge in (cls._graph_edge(item) for item in cls._as_list(raw_edges)) if edge
+        ]
         if not nodes and not edges:
             return None
         node_ids = {node["id"] for node in nodes}
         for edge in edges:
             for node_id in (edge["source"], edge["target"]):
                 if node_id and node_id not in node_ids:
-                    nodes.append({"id": node_id, "label": node_id, "kind": "Node", "group": "Node", "metadata": {}})
+                    nodes.append(
+                        {
+                            "id": node_id,
+                            "label": node_id,
+                            "kind": "Node",
+                            "group": "Node",
+                            "metadata": {},
+                        }
+                    )
                     node_ids.add(node_id)
         query = str(payload.get("query") or "").strip()
         return {
@@ -1552,12 +1733,16 @@ class AgentLoop:
     def _graph_edge(value: Any) -> dict[str, Any] | None:
         if not isinstance(value, dict):
             return None
-        source = str(value.get("source") or value.get("source_id") or value.get("from") or "").strip()
+        source = str(
+            value.get("source") or value.get("source_id") or value.get("from") or ""
+        ).strip()
         target = str(value.get("target") or value.get("target_id") or value.get("to") or "").strip()
         if not source or not target:
             return None
         label = str(value.get("label") or value.get("type") or value.get("rel_type") or "RELATED")
-        edge_id = str(value.get("id") or value.get("relationship_id") or f"{source}:{label}:{target}")
+        edge_id = str(
+            value.get("id") or value.get("relationship_id") or f"{source}:{label}:{target}"
+        )
         metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else dict(value)
         return {
             "id": edge_id,
@@ -1595,6 +1780,9 @@ class AgentLoop:
             metadata=metadata,
         )
         return await self._process_message(
-            msg, session_key=session_key, on_progress=on_progress,
-            on_stream=on_stream, on_stream_end=on_stream_end,
+            msg,
+            session_key=session_key,
+            on_progress=on_progress,
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
         )

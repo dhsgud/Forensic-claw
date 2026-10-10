@@ -41,5 +41,6 @@ uv.lock
 !/README.md
 !/AGENTS.md
 !docs/REPOSITORY_STATUS_AND_SCOPE.md
+!docs/TRUST_AND_REPORT_DEVELOPMENT_PLAN.md
 !forensic_claw/templates/**/*.md
 !forensic_claw/skills/**/*.md

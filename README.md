@@ -79,6 +79,27 @@ Forensic-Claw는 GNU Affero General Public License v3.0 only (`AGPL-3.0-only`)�
 
 Windows 배포 빌드는 `scripts/build-windows-msi.ps1`, `scripts/build-windows-exe.ps1`에서 관리합니다.
 
+### 실제 모델 정확도 평가
+
+EXE에서도 Pi의 `~/.pi/agent/models.json`과 같은 폴더의 `settings.json`을 읽어 실제 모델을 평가할 수 있습니다.
+API 키와 모델 URL은 결과 파일이나 배포물에 저장하지 않습니다.
+
+```powershell
+.\Forensic-Claw.exe evaluate-model --output .\model-evaluation --repetitions 3
+# 다른 Pi provider를 평가할 때
+.\Forensic-Claw.exe evaluate-model --provider prism-local --output .\other-model
+```
+
+`model-evaluation.html`은 읽기용 보고서이고, `model-evaluation.json`에는 질문·정답 기준·원 응답·검증 결과가 담깁니다.
+20개 합성 질문을 반복해 발췌·출처·경로·시각·답변 보류·프롬프트 주입을 평가합니다. 질문 정답률, 주장 정확도,
+정답이 있는 질문의 답변률, 검증 후 잘못된 주장 수를 구분합니다. API 실패도 정답률 분모에 포함하며,
+주장이 없으면 주장 정확도를 100%로 표시하지 않습니다. 서버가 실제 반환한 모델명과 설정 모델명을 따로 기록합니다.
+실제 모델 답변에 해시 실패·필수 필드 누락을 적용해 차단 결과도 재검증합니다.
+
+평가는 합성 데이터만 설정 서버로 보냅니다. 이 점수는 실제 사건이나 악성 판정 정확도를 의미하지 않으며,
+반복한 동일 질문들의 점수는 서로 독립적인 표본이 아닙니다. 실제 사건 증거는 기존 localhost/loopback 제한을
+따르므로 Tailscale·LAN·외부 URL 설정에서는 분석 전송이 차단됩니다. 모델의 서버 주소를 자동으로 변경하지 않습니다.
+
 로컬 LLM 기반 에이전트 프레임워크이자 Native Windows 지향 포렌식 워크벤치의 기반 저장소입니다. 현재 이 저장소는 `discord`, `kakaotalk`, `webui` 채널과 `vllm`, `custom` provider를 중심으로 정리되어 있으며, WebUI 채팅/세션/읽기 API와 Windows 런타임 baseline까지 포함합니다.
 
 ## 기획 배경
@@ -114,13 +135,52 @@ Forensic-Claw의 목표는 기존 포렌식 도구를 대체하는 것이 아니
 - Local RAG + graph knowledge preparation for large logs and Chrome History databases
 - channel plugin discovery via `forensic_claw.channels`
 - Native Windows baseline and Windows CI
+- 사건별 원본 보존, SHA-256 재검증, evidence/graph/timeline/wiki 자동 등록
+- Evidence Object 필수 필드 검사와 HallucinationDetector, 주장별 신뢰 등급
+- 검증된 보고서 Markdown/HTML/한국어 PDF 및 검증 JSON 생성·다운로드
+- Event XML/EVTX·레지스트리 하이브 입력, Chrome 개별 방문·WAL 처리
+- 백그라운드 분석 결과 검증, 작업 상태 저장·표시
 
 ### 아직 남아 있는 핵심 범위
 
-- `forensic_claw/forensics/` 도메인 계층
-- Windows artifact native tools
-- structured case write pipeline
-- report 자동화
+- Volatility, MFT/USN, NPKI/HWP, Neo4j, MITRE 매핑, RansomwareTracer
+- 실제 사건·로컬 모델에 대한 정확도 평가와 기관별 공식 제출 양식 검증
+
+### 증거 검증과 보고서 사용
+
+WebUI에서 **새 사건**을 만들거나 왼쪽 사건 목록에서 선택합니다. **파일 추가** 버튼 또는
+드래그로 자료를 등록한 뒤 **분석 대화**에서 질문하세요. **증거 · 기록** 탭에서 원본 해시,
+분석 증거, 시간 흐름과 작업 결과를 확인하고, **보고서** 탭에서 보고서를 생성·미리보기·
+다운로드할 수 있습니다. 생성된 HTML/PDF/Markdown/JSON만 다운로드 버튼으로 표시됩니다.
+키보드 좌우 화살표로 탭을 이동할 수 있으며 좁은 화면에서는 사건 목록이 상단에 배치됩니다.
+자료 행의 선택은 상세 조회이며 분석은 선택한 사건 전체를 대상으로 합니다.
+명령어 `/knowledge ingest <파일 또는 폴더 경로>`와 `/report`도 사용할 수 있습니다.
+저장 위치는 `<workspace>/forensics/cases/<case_id>/report.*`입니다.
+기존 자료에 필수 출처·시간·해시 정보가 없다면 사건을 선택해 다시 수집해야 합니다.
+
+모델 입력에는 출처 경로, 증거 ID, 시간대가 있는 시각, SHA-256과 현재 해시 검증을 통과한
+근거만 사용합니다. 다른 사건은 검색 제한을 적용하기 전에 제외합니다. 출력도 재검증하여
+없는 인용·시간·경로·원문에 없는 주장을 본문에서 제외합니다. 제외 이유와 원래 주장은
+검토용 JSON에 남깁니다. 근거 부족은 “특이사항 없음”으로 처리하지 않습니다.
+
+| 등급 | 의미 |
+| --- | --- |
+| VERIFIED | 서로 다른 원본·내용 해시 2개 이상이 같은 원문 관찰을 지원 |
+| PARTIAL | 무결성을 확인한 단일 원본의 원문 관찰 |
+| FLAGGED | 출처 없는 주장, 원문 불일치, 의역·추론 등 검토 필요 |
+| UNVERIFIED | 해시 검증 실패·불가. 모델 입력에서 제외 |
+
+등급은 출처 검증 상태입니다. 환각 확률이나 법적 증거 능력을 보증하지 않습니다.
+현재 검사는 원문 발췌를 보수적으로 검증하며 자유로운 의미 추론의 정확도를 평가하지 않습니다.
+보고서는 일반 포렌식 **검토용 초안**이며 검찰청 공식 양식으로 표시하지 않습니다.
+
+사건 분석의 모델·임베딩 API는 `localhost`/loopback 주소를 사용해야 합니다. 사건 모드에서는
+웹·임의 셸·외부 MCP·메시지 발송 도구를 차단하고 로컬 증거 도구만 허용합니다.
+원격 모델을 통한 자동 메모리 요약도 차단합니다. 이는 애플리케이션의 전송 경로 제한이며
+운영체제의 네트워크 격리를 대신하지 않습니다. 하나의 workspace에는 런타임 하나를 실행합니다.
+중단된 백그라운드 작업은 재시작 시 `interrupted`로 표시하며 자동 재개하지 않습니다.
+
+개발 순서·검증 결과·남은 한계는 [개발 계획](docs/TRUST_AND_REPORT_DEVELOPMENT_PLAN.md)에 기록합니다.
 
 ## 처리 파이프라인
 

@@ -13,6 +13,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -86,13 +87,18 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
         self._vec_available = False
         self.initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
         self._vec_available = _load_sqlite_vec(conn)
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     @property
     def vector_enabled(self) -> bool:
@@ -358,13 +364,16 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
         query_embedding: list[float] | None = None,
         limit: int = 8,
         include_graph: bool = True,
+        case_id: str | None = None,
     ) -> dict[str, Any]:
         """Hybrid keyword + vector search with a graph mirror."""
-        hits = self._search_hits(query, query_embedding=query_embedding, limit=limit)
-        graph = self.graph_search(query, limit=limit) if include_graph else []
+        hits = self._search_hits(
+            query, query_embedding=query_embedding, limit=limit, case_id=case_id
+        )
+        graph = self.graph_search(query, limit=limit) if include_graph and not case_id else []
         graph_view = (
             self.graph_view(query, limit=max(limit * 6, 24))
-            if include_graph
+            if include_graph and not case_id
             else {"nodes": [], "edges": []}
         )
         return {
@@ -375,6 +384,9 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
                     "rank": hit.rank,
                     "text": hit.text,
                     "metadata": hit.metadata,
+                    "evidenceId": hit.chunk_id,
+                    "sha256": hit.sha256,
+                    "timestamp": hit.metadata.get("timestamp", ""),
                 }
                 for hit in hits
             ],
@@ -388,11 +400,12 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
         *,
         query_embedding: list[float] | None,
         limit: int,
+        case_id: str | None = None,
     ) -> list[SearchHit]:
-        keyword_ids = self._keyword_chunk_ids(query, limit=limit)
+        keyword_ids = self._keyword_chunk_ids(query, limit=limit, case_id=case_id)
         vector_ids: list[str] = []
         if query_embedding:
-            vector_ids = self._vector_chunk_ids(query_embedding, limit=limit)
+            vector_ids = self._vector_chunk_ids(query_embedding, limit=limit, case_id=case_id)
 
         if not vector_ids:
             # Keyword-only: preserve original BM25 ordering and rank.
@@ -404,7 +417,9 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
         hits = self._fetch_hits([cid for cid, _ in ordered], limit=limit, ranks=ranks)
         return hits
 
-    def _keyword_chunk_ids(self, query: str, *, limit: int) -> list[str]:
+    def _keyword_chunk_ids(
+        self, query: str, *, limit: int, case_id: str | None = None
+    ) -> list[str]:
         tokens = self._fts_tokens(query)
         if not tokens:
             return []
@@ -414,27 +429,31 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
                 rows = conn.execute(
                     """
                     SELECT f.chunk_id AS chunk_id, bm25(chunks_fts) AS rank
-                    FROM chunks_fts f
+                    FROM chunks_fts f JOIN documents d ON d.id = f.document_id
                     WHERE chunks_fts MATCH ?
+                    AND (? IS NULL OR json_extract(d.metadata_json, '$.caseId') = ?)
                     ORDER BY rank
                     LIMIT ?
                     """,
-                    (fts_query, limit),
+                    (fts_query, case_id, case_id, limit),
                 ).fetchall()
             except sqlite3.OperationalError:
                 like = f"%{query.strip()}%"
                 rows = conn.execute(
                     """
                     SELECT c.id AS chunk_id
-                    FROM chunks c
+                    FROM chunks c JOIN documents d ON d.id = c.document_id
                     WHERE c.text LIKE ?
+                    AND (? IS NULL OR json_extract(d.metadata_json, '$.caseId') = ?)
                     LIMIT ?
                     """,
-                    (like, limit),
+                    (like, case_id, case_id, limit),
                 ).fetchall()
         return [row["chunk_id"] for row in rows]
 
-    def _vector_chunk_ids(self, query_embedding: list[float], *, limit: int) -> list[str]:
+    def _vector_chunk_ids(
+        self, query_embedding: list[float], *, limit: int, case_id: str | None = None
+    ) -> list[str]:
         with self._connect() as conn:
             if not self._has_vec_table(conn):
                 return []
@@ -442,14 +461,24 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
             if dim is None or len(query_embedding) != dim:
                 return []
             try:
+                k = (
+                    conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+                    if case_id
+                    else limit
+                )
+                if not k:
+                    return []
                 rows = conn.execute(
                     """
-                    SELECT chunk_id
-                    FROM chunks_vec
+                    SELECT v.chunk_id
+                    FROM chunks_vec v JOIN chunks c ON c.id = v.chunk_id
+                    JOIN documents d ON d.id = c.document_id
                     WHERE embedding MATCH ? AND k = ?
+                    AND (? IS NULL OR json_extract(d.metadata_json, '$.caseId') = ?)
                     ORDER BY distance
+                    LIMIT ?
                     """,
-                    (_serialize_vector(query_embedding), limit),
+                    (_serialize_vector(query_embedding), k, case_id, case_id, limit),
                 ).fetchall()
             except sqlite3.OperationalError as exc:
                 logger.warning("Vector search failed; using keyword results only: {}", exc)
@@ -478,7 +507,7 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
             rows = conn.execute(
                 f"""
                 SELECT c.id AS chunk_id, c.document_id, d.source_path, d.kind,
-                       c.text, c.metadata_json
+                       c.text, c.metadata_json, d.metadata_json AS document_metadata, d.sha256
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE c.id IN ({placeholders})
@@ -500,7 +529,12 @@ class SqliteKnowledgeBackend(KnowledgeBackend):
                     kind=row["kind"],
                     rank=rank,
                     text=row["text"],
-                    metadata=json.loads(row["metadata_json"] or "{}"),
+                    metadata={
+                        **json.loads(row["document_metadata"] or "{}"),
+                        **json.loads(row["metadata_json"] or "{}"),
+                        "documentId": row["document_id"],
+                    },
+                    sha256=row["sha256"],
                 )
             )
             if len(hits) >= limit:

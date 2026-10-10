@@ -3,92 +3,98 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Forensic-Claw Local Workbench</title>
-    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708">
+    <title>Forensic-Claw · 포렌식 워크벤치</title>
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708-workbench-20261010">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
       <form id="setup-form" class="setup-card">
         <div>
-          <p class="eyebrow">Local Workbench Setup</p>
+          <p class="eyebrow">FORENSIC WORKBENCH</p>
           <h1>Forensic-Claw</h1>
-          <p class="subtle">케이스, 모델, 지식 저장소를 한 번에 준비합니다.</p>
+          <p class="subtle">사건을 만들고, 증거에 근거한 분석을 시작하세요.</p>
         </div>
 
         <div class="setup-grid">
           <label class="field">
-            <span>Case Name</span>
+            <span>사건명</span>
             <input id="setup-case-name" type="text" placeholder="침해사고 초기 분석" required>
           </label>
           <label class="field">
-            <span>Investigator</span>
+            <span>분석관</span>
             <input id="setup-investigator-name" type="text" placeholder="홍길동" required>
           </label>
           <label class="field">
-            <span>Provider</span>
+            <span>모델 연결 방식</span>
             <select id="setup-model-provider" required></select>
           </label>
           <label class="field">
-            <span>Model ID</span>
+            <span>로컬 모델 이름</span>
             <input id="setup-model-id" type="text" placeholder="qwen2.5-coder-7b-instruct" required>
           </label>
           <label class="field setup-wide">
-            <span>API Base</span>
+            <span>로컬 모델 서버 주소</span>
             <input id="setup-model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1" required>
           </label>
+          <details class="setup-wide advanced-settings">
+            <summary>상세 검색 설정 <span>선택 사항</span></summary>
+            <div class="setup-grid">
           <label class="field setup-wide">
-            <span>Knowledge Backend</span>
+            <span>검색 저장소</span>
             <select id="setup-knowledge-backend">
               <option value="sqlite">Local RAG + Graph Index</option>
             </select>
           </label>
           <label class="field check-field setup-wide setup-vector-field">
             <input id="setup-vector-enabled" type="checkbox" checked>
-            <span>Enable semantic (vector) search</span>
+            <span>의미 기반 검색 사용</span>
           </label>
           <label class="field setup-wide setup-vector-field">
-            <span>Embedding Model</span>
+            <span>검색용 임베딩 모델</span>
             <input id="setup-vector-model" type="text" placeholder="nomic-embed-text">
           </label>
           <label class="field setup-wide setup-vector-field">
-            <span>Embedding API Base</span>
+            <span>임베딩 서버 주소</span>
             <input id="setup-vector-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
           </label>
           <label class="field setup-vector-field">
-            <span>Embedding Dimensions</span>
+            <span>임베딩 차원</span>
             <input id="setup-vector-dimensions" type="number" min="0" max="8192" placeholder="0">
           </label>
+            </div>
+          </details>
         </div>
 
         <div class="setup-actions">
-          <button id="setup-test-model" class="ghost-button" type="button">Test LLM</button>
-          <button id="setup-test-db" class="ghost-button" type="button">Test DB</button>
-          <button id="setup-start" class="send-button" type="submit">Start Workspace</button>
+          <button id="setup-test-model" class="ghost-button" type="button">모델 연결 확인</button>
+          <button id="setup-test-db" class="ghost-button" type="button">저장소 확인</button>
+          <button id="setup-start" class="send-button" type="submit">사건 만들고 시작</button>
         </div>
-        <p id="setup-status" class="subtle">Ollama, LM Studio, llama.cpp 등 OpenAI-compatible endpoint를 사용할 수 있습니다.</p>
+        <p id="setup-status" class="subtle" role="status">사용 중인 로컬 모델 서버의 주소와 모델 이름을 입력하세요.</p>
       </form>
     </section>
 
     <div id="app-shell" class="shell is-hidden">
       <aside class="sidebar">
         <div class="brand">
-          <p class="eyebrow">Evidence Workbench</p>
-          <h1>Forensic-Claw</h1>
-          <p class="subtle">로컬 모델과 지식 저장소로 케이스 분석을 진행합니다.</p>
+          <div class="brand-mark" aria-hidden="true">FC</div>
+          <div><h1>Forensic-Claw</h1><p class="subtle">증거에서 시작하는 분석</p></div>
         </div>
 
         <section class="panel">
           <div class="panel-title-row">
-            <h2>Case</h2>
+            <h2>현재 사건</h2>
             <span id="session-badge" class="badge">loading</span>
           </div>
           <p id="session-meta" class="subtle">세션을 준비하는 중입니다.</p>
         </section>
 
+        <button id="new-case" class="send-button new-case-button" type="button">＋ 새 사건</button>
+
         <button id="settings-open" class="sidebar-action" type="button">
           <span>
-            <strong>Settings</strong>
-            <small>Runtime model and knowledge store</small>
+            <strong>분석 환경 설정</strong>
+            <small>모델 연결 · 검색 설정</small>
           </span>
           <span class="settings-badges">
             <span id="model-status" class="badge">idle</span>
@@ -98,42 +104,44 @@
 
         <section class="panel sessions-panel">
           <div class="panel-title-row">
-            <h2>Threads</h2>
-            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
+            <h2>대화 기록</h2>
+            <button id="refresh-sessions" class="ghost-button" type="button">새로고침</button>
           </div>
           <div id="sessions-list" class="session-list"></div>
         </section>
 
-        <section class="panel case-scope-panel" hidden>
+        <details class="panel case-scope-panel">
+          <summary>분석 범위 상세</summary>
           <div class="panel-title-row">
-            <h2>Scope</h2>
-            <button id="clear-scope" class="ghost-button" type="button">Clear</button>
+            <h2>선택한 범위</h2>
+            <button id="clear-scope" class="ghost-button" type="button">상세 선택 해제</button>
           </div>
           <label class="field">
-            <span>Case ID</span>
-            <input id="case-id" type="text" placeholder="case-2026-0001" list="case-suggestions">
+            <span>사건 식별자</span>
+            <input id="case-id" type="text" placeholder="사건 목록에서 선택" list="case-suggestions" readonly>
           </label>
           <label class="field">
-            <span>Artifact ID</span>
+            <span>상세 조회 증거 식별자</span>
             <input id="artifact-id" type="text" placeholder="EVD-001" list="artifact-suggestions">
           </label>
           <p id="scope-summary" class="subtle">기본 브라우저 세션에 연결합니다.</p>
-        </section>
+        </details>
 
-        <section class="panel cases-panel" hidden>
+        <section class="panel cases-panel">
           <div class="panel-title-row">
-            <h2>Cases</h2>
-            <button id="refresh-cases" class="ghost-button" type="button">Refresh</button>
+            <h2>사건 목록</h2>
+            <button id="refresh-cases" class="ghost-button" type="button">새로고침</button>
           </div>
           <div id="cases-list" class="session-list"></div>
         </section>
+        <p class="sidebar-footnote">FORENSIC-CLAW<br>로컬 조사 워크벤치</p>
       </aside>
 
       <main class="workspace">
         <header class="workspace-header">
           <div>
-            <p class="eyebrow">Investigation Thread</p>
-            <h2 id="active-session-title">새 브라우저 세션</h2>
+            <p class="eyebrow">CASE WORKSPACE</p>
+            <h2 id="active-session-title">사건 분석</h2>
           </div>
           <div class="header-status">
             <span id="connection-status" class="status-pill">offline</span>
@@ -141,20 +149,28 @@
           </div>
         </header>
 
+        <nav class="workspace-nav" aria-label="사건 작업" role="tablist">
+          <button id="view-chat" class="workspace-tab active" type="button" role="tab" aria-selected="true" aria-controls="chat-log" data-view="chat">분석 대화</button>
+          <button id="view-evidence" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="case-workspace" tabindex="-1" data-view="evidence">증거 · 기록</button>
+          <button id="view-report" class="workspace-tab" type="button" role="tab" aria-selected="false" aria-controls="case-workspace" tabindex="-1" data-view="report">보고서</button>
+          <span class="nav-spacer"></span>
+          <button id="workspace-stop" class="ghost-button" type="button" hidden>분석 중지</button>
+        </nav>
+        <p id="workspace-feedback" class="workspace-feedback" role="status" aria-live="polite">사건을 준비하는 중입니다.</p>
+
         <section class="workspace-body no-inspector">
-          <section id="chat-log" class="chat-log"></section>
+          <section id="chat-log" class="chat-log" role="tabpanel" aria-labelledby="view-chat"></section>
+
+          <section id="case-workspace" class="case-workspace" role="tabpanel" aria-labelledby="view-evidence" hidden>
+            <div class="case-page-heading">
+              <div><p class="eyebrow">CASE MATERIALS</p><h2 id="case-page-title">증거와 기록</h2><p id="case-summary" class="subtle">사건을 선택하면 수집한 증거를 확인할 수 있습니다.</p></div>
+              <span id="case-detail-status" class="badge">대기</span>
+            </div>
+            <div id="case-detail" class="detail-stack"></div>
+            <div id="artifact-detail" class="detail-stack"></div>
+          </section>
 
           <aside class="inspector">
-            <section class="panel inspector-panel case-inspector-panel" hidden>
-              <div class="panel-title-row">
-                <h2>Case Explorer</h2>
-                <span id="case-detail-status" class="badge">idle</span>
-              </div>
-              <p id="case-summary" class="subtle">선택된 case가 없습니다.</p>
-              <div id="case-detail" class="detail-stack"></div>
-              <div id="artifact-detail" class="detail-stack"></div>
-            </section>
-
             <section id="graph-inspector-panel" class="panel inspector-panel graph-inspector-panel" hidden>
               <div class="panel-title-row graph-title-row">
                 <div class="graph-panel-actions" aria-label="Graph view controls">
@@ -162,7 +178,7 @@
                   <button id="graph-fullscreen" class="ghost-button icon-button" type="button" aria-label="Open graph fullscreen" title="전체화면">⛶</button>
                   <button id="graph-close" class="ghost-button icon-button" type="button" aria-label="Close graph panel" title="닫기">×</button>
                 </div>
-                <h2>Graph View</h2>
+                <h2>증거 관계</h2>
               </div>
               <p id="graph-summary" class="subtle">관계 그래프를 선택하세요.</p>
               <div class="graph-zoom-controls" aria-label="Graph zoom controls">
@@ -183,86 +199,99 @@
           <div id="attachment-tray" class="attachment-tray" hidden></div>
           <div id="slash-menu" class="slash-menu" hidden></div>
           <form id="composer" class="composer">
-            <textarea id="message-input" rows="4" placeholder="증거, 로그, 브라우저 기록에 대해 질문하세요"></textarea>
-            <button id="send-button" class="send-button" type="button">Send</button>
+            <label for="message-input" class="sr-only">분석할 내용</label>
+            <textarea id="message-input" rows="3" placeholder="증거에서 확인하고 싶은 내용을 입력하세요"></textarea>
+            <button id="send-button" class="send-button" type="button">분석 요청</button>
           </form>
+          <div class="composer-toolbar"><button class="ghost-button file-picker" id="pick-file" type="button">＋ 파일 추가</button><input id="evidence-file" class="sr-only" type="file" multiple aria-label="추가할 증거 파일 선택"><span>파일을 끌어놓아도 됩니다 · Shift + Enter 줄바꿈</span></div>
         </section>
       </main>
     </div>
+
+    <dialog id="case-create-dialog" class="case-create-dialog">
+      <form id="case-create-form" class="case-create-form">
+        <div class="panel-title-row"><h2>새 사건</h2><button id="case-create-close" class="ghost-button icon-button" type="button" aria-label="새 사건 창 닫기">×</button></div>
+        <p class="subtle">원본, 분석 기록과 보고서를 사건별로 관리합니다.</p>
+        <label class="field"><span>사건명</span><input id="case-create-name" type="text" maxlength="200" placeholder="예: 2026년 침해사고 조사" required autofocus></label>
+        <label class="field"><span>분석관</span><input id="case-create-investigator" type="text" maxlength="100" required></label>
+        <p id="case-create-status" class="subtle" role="status"></p>
+        <button class="send-button" type="submit">사건 만들기</button>
+      </form>
+    </dialog>
 
     <dialog id="settings-dialog" class="settings-dialog">
       <form method="dialog" class="settings-modal">
         <header class="settings-header">
           <div>
-            <p class="eyebrow">Workspace Settings</p>
-            <h2>Settings</h2>
+            <p class="eyebrow">WORKSPACE SETTINGS</p>
+            <h2>분석 환경 설정</h2>
           </div>
-          <button id="settings-close" class="ghost-button icon-button" type="button" aria-label="Close settings" title="닫기">×</button>
+          <button id="settings-close" class="ghost-button icon-button" type="button" aria-label="설정 창 닫기" title="닫기">×</button>
         </header>
 
         <div class="settings-grid">
           <section class="panel model-panel">
             <div class="panel-title-row">
-              <h2>Runtime</h2>
+              <h2>로컬 모델</h2>
             </div>
             <label class="field">
-              <span>Provider</span>
+              <span>연결 방식</span>
               <select id="model-provider"></select>
             </label>
             <label class="field">
-              <span>Model ID</span>
+              <span>모델 이름</span>
               <input id="model-id" type="text" placeholder="qwen2.5-coder-7b-instruct">
             </label>
             <label class="field">
-              <span>API Base</span>
+              <span>모델 서버 주소</span>
               <input id="model-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
             </label>
             <div class="button-row">
-              <button id="model-test" class="ghost-button" type="button">Test</button>
-              <button id="model-save" class="ghost-button" type="button">Apply</button>
+              <button id="model-test" class="ghost-button" type="button">연결 확인</button>
+              <button id="model-save" class="ghost-button" type="button">저장</button>
             </div>
-            <p id="model-summary" class="subtle">Runtime model endpoint is loading.</p>
+            <p id="model-summary" class="subtle">모델 설정을 불러오는 중입니다.</p>
           </section>
 
           <section class="panel knowledge-panel">
             <div class="panel-title-row">
-              <h2>Knowledge Store</h2>
+              <h2>증거 검색</h2>
             </div>
             <label class="field check-field">
               <input id="knowledge-enabled" type="checkbox">
-              <span>Enable local RAG</span>
+              <span>로컬 증거 검색 사용</span>
             </label>
             <label class="field">
-              <span>Backend</span>
+              <span>검색 방식</span>
               <select id="knowledge-backend">
                 <option value="sqlite">Local RAG + Graph Index</option>
               </select>
             </label>
             <label class="field">
-              <span>Store Directory</span>
+              <span>저장 폴더</span>
               <input id="knowledge-store-dir" type="text" placeholder="knowledge">
             </label>
             <label class="field check-field">
               <input id="vector-enabled" type="checkbox" checked>
-              <span>Enable semantic (vector) search</span>
+              <span>의미 기반 검색 사용</span>
             </label>
             <label class="field">
-              <span>Embedding Model</span>
+              <span>검색용 임베딩 모델</span>
               <input id="vector-model" type="text" placeholder="nomic-embed-text">
             </label>
             <label class="field">
-              <span>Embedding API Base</span>
+              <span>임베딩 서버 주소</span>
               <input id="vector-api-base" type="text" placeholder="http://127.0.0.1:1234/v1">
             </label>
             <label class="field">
-              <span>Embedding Dimensions</span>
+              <span>임베딩 차원</span>
               <input id="vector-dimensions" type="number" min="0" max="8192" placeholder="0">
             </label>
             <div class="button-row">
-              <button id="knowledge-test" class="ghost-button" type="button">Test DB</button>
-              <button id="knowledge-save" class="ghost-button" type="button">Apply</button>
+              <button id="knowledge-test" class="ghost-button" type="button">저장소 확인</button>
+              <button id="knowledge-save" class="ghost-button" type="button">저장</button>
             </div>
-            <p id="knowledge-summary" class="subtle">Knowledge graph settings are loading.</p>
+            <p id="knowledge-summary" class="subtle">검색 설정을 불러오는 중입니다.</p>
           </section>
         </div>
       </form>
@@ -278,6 +307,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js?v=settings-20260708" defer></script>
+    <script src="/ui/assets/app.js?v=settings-20260708-workbench-20261010" defer></script>
   </body>
 </html>

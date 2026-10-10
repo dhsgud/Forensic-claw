@@ -37,11 +37,15 @@ ruff check forensic_claw tests
 
 ```text
 py -3.12 -m pytest tests -q
-531 passed
+563 passed
 
 py -3.12 -m ruff check forensic_claw tests
 All checks passed!
 ```
+
+2026-10-10: 사건별 원본·증거 등록, 필수 Evidence Object 검증, 주장별 신뢰 등급과
+HallucinationDetector, 일반 포렌식 HTML/PDF/JSON 보고서, 타임라인·증거 인덱스·작업 상태를
+연결했습니다. 상세 범위와 검증 한계는 [개발 계획](TRUST_AND_REPORT_DEVELOPMENT_PLAN.md)에 있습니다.
 
 ## 운영 주의사항
 

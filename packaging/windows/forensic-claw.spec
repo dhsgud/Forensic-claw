@@ -15,6 +15,7 @@ datas = collect_data_files(
         "knowledge/*.hx",
         "templates/**/*",
         "skills/**/*",
+        "forensics/report/templates/*.json",
     ],
     excludes=[
         "**/__pycache__",
@@ -31,6 +32,7 @@ datas += [
 # fails at sqlite_vec.load() with "module not found" and semantic search silently
 # falls back to keyword-only. Bundle the extension so vector search works in the exe.
 datas += collect_data_files("sqlite_vec")
+datas += collect_data_files("reportlab")
 
 hiddenimports = collect_submodules("forensic_claw")
 hiddenimports += ["sqlite_vec"]

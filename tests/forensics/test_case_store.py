@@ -95,12 +95,12 @@ def test_collect_context_reads_evidence_sources_and_graph(tmp_path: Path):
     assert context.graph == {"nodes": [{"id": "n1"}], "edges": []}
 
     rows = context.integrity_rows()
-    assert rows[0]["evidenceId"] == "art01"
-    assert rows[0]["file"] == "system.log"
-    assert rows[0]["sha256"] == expected["sha256"]
+    row = next(row for row in rows if row["evidenceId"] == "art01")
+    assert row["file"] == "system.log"
+    assert row["sha256"] == expected["sha256"]
 
 
-def test_collect_context_prefers_recorded_hashes(tmp_path: Path):
+def test_collect_context_rechecks_bytes_when_acquisition_hash_is_recorded(tmp_path: Path):
     store = CaseStore(tmp_path)
     manifest = store.ensure_case(case_name="Case Y", investigator_name="수사관")
     case_id = manifest["caseId"]
@@ -116,8 +116,11 @@ def test_collect_context_prefers_recorded_hashes(tmp_path: Path):
 
     context = store.collect_context(case_id)
     assert context is not None
-    # Acquisition-time hash is trusted over a fresh computation.
-    assert context.evidence[0].hashes["data.bin"]["sha256"] == "recorded-at-acquisition"
+    assert (
+        context.evidence[0].hashes["data.bin"]["sha256"]
+        == calculate_file_hashes(evidence_file)["sha256"]
+    )
+    assert context.evidence[0].verification["data.bin"]["ok"] is False
 
 
 def test_collect_context_missing_case_returns_none(tmp_path: Path):

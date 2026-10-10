@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,11 +11,19 @@ from forensic_claw.bus.queue import MessageBus
 from forensic_claw.providers.base import GenerationSettings, LLMResponse
 
 
+class _Provider:
+    generation = GenerationSettings(max_tokens=0)
+
+    def get_default_model(self):
+        return "test-model"
+
+    async def chat_with_retry(self, **kwargs):
+        return LLMResponse(content="분석이 완료되었습니다.", tool_calls=[])
+
+
 @pytest.mark.asyncio
 async def test_large_system_log_request_auto_backgrounds(tmp_path) -> None:
-    provider = MagicMock()
-    provider.get_default_model.return_value = "test-model"
-    provider.generation = GenerationSettings(max_tokens=0)
+    provider = _Provider()
 
     loop = AgentLoop(
         bus=MessageBus(),
@@ -24,7 +31,6 @@ async def test_large_system_log_request_auto_backgrounds(tmp_path) -> None:
         workspace=tmp_path,
         enforce_response_language=False,
     )
-    loop.subagents.spawn = AsyncMock(return_value="started")
 
     msg = InboundMessage(
         channel="webui",
@@ -38,12 +44,11 @@ async def test_large_system_log_request_auto_backgrounds(tmp_path) -> None:
 
     assert response is not None
     assert "백그라운드" in response.content
-    loop.subagents.spawn.assert_awaited_once()
-    kwargs = loop.subagents.spawn.await_args.kwargs
-    assert kwargs["session_key"] == msg.session_key
-    assert kwargs["metadata"]["case_id"] == "case-2026-0001"
-    assert kwargs["metadata"]["artifact_id"] == "EVD-001"
-    assert kwargs["metadata"]["_background_task"] is True
+    completed = await loop.bus.consume_inbound()
+    assert completed.session_key == msg.session_key
+    assert completed.metadata["case_id"] == "case-2026-0001"
+    assert completed.metadata["artifact_id"] == "EVD-001"
+    assert completed.metadata["trust_checked"] is True
 
     session = loop.sessions.get_or_create(msg.session_key)
     assert session.messages[0]["role"] == "user"
@@ -57,8 +62,7 @@ async def test_large_system_log_request_auto_backgrounds(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_subagent_announcement_preserves_scope_metadata(tmp_path) -> None:
     bus = MessageBus()
-    provider = MagicMock()
-    provider.get_default_model.return_value = "test-model"
+    provider = _Provider()
     mgr = SubagentManager(provider=provider, workspace=tmp_path, bus=bus)
 
     await mgr._announce_result(
@@ -81,10 +85,7 @@ async def test_subagent_announcement_preserves_scope_metadata(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_system_message_uses_session_key_override_for_persistence(tmp_path) -> None:
-    provider = MagicMock()
-    provider.get_default_model.return_value = "test-model"
-    provider.generation = GenerationSettings(max_tokens=0)
-    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="분석이 완료되었습니다.", tool_calls=[]))
+    provider = _Provider()
 
     loop = AgentLoop(
         bus=MessageBus(),
@@ -107,6 +108,8 @@ async def test_system_message_uses_session_key_override_for_persistence(tmp_path
     assert response is not None
     assert response.chat_id == "sess_123"
     session = loop.sessions.get_or_create("webui:sess_123:case:case-2026-0001:artifact:EVD-001")
-    assert any(message.get("content") == "분석이 완료되었습니다." for message in session.messages)
+    assert any(
+        "검증된 사건 근거가 없어" in str(message.get("content", "")) for message in session.messages
+    )
 
     await asyncio.gather(*loop._background_tasks, return_exceptions=True)

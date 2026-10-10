@@ -109,10 +109,17 @@ class WebUIChannel(BaseChannel):
         app.router.add_post("/api/chat", self._handle_chat)
         app.router.add_post("/api/stop", self._handle_stop)
         app.router.add_get("/api/cases", self._handle_cases_list)
+        app.router.add_post("/api/cases", self._handle_case_create)
         app.router.add_get("/api/cases/{case_id}", self._handle_case_detail)
         app.router.add_get("/api/cases/{case_id}/report", self._handle_case_report)
+        app.router.add_get("/api/cases/{case_id}/report/download", self._handle_report_download)
+        app.router.add_get("/api/cases/{case_id}/timeline", self._handle_case_timeline)
+        app.router.add_get("/api/cases/{case_id}/wiki", self._handle_case_wiki)
+        app.router.add_get("/api/tasks", self._handle_tasks)
         app.router.add_get("/api/cases/{case_id}/graph", self._handle_case_graph)
-        app.router.add_get("/api/cases/{case_id}/evidence/{evidence_id}", self._handle_evidence_detail)
+        app.router.add_get(
+            "/api/cases/{case_id}/evidence/{evidence_id}", self._handle_evidence_detail
+        )
         app.router.add_get("/api/cases/{case_id}/sources/{source_id}", self._handle_source_detail)
         app.router.add_get("/api/sessions", self._handle_sessions_list)
         app.router.add_get(r"/api/sessions/{session_key:.+}", self._handle_session_detail)
@@ -315,7 +322,7 @@ class WebUIChannel(BaseChannel):
         bucket = self._shell_traces[chat_id]
         bucket.append(trace_event)
         if len(bucket) > self._MAX_SHELL_TRACES:
-            del bucket[:-self._MAX_SHELL_TRACES]
+            del bucket[: -self._MAX_SHELL_TRACES]
 
     async def _drop_browser_state(self, session_id: str | None) -> None:
         """Forget in-memory browser state after a hard reset."""
@@ -598,10 +605,14 @@ class WebUIChannel(BaseChannel):
                     for item in get_builtin_command_specs()
                 ],
                 "workspace": {
-                    "hasSessions": bool(self._sessions_for_browser(session_id or "")) if session_id else False,
+                    "hasSessions": bool(self._sessions_for_browser(session_id or ""))
+                    if session_id
+                    else False,
                     "hasCases": has_cases,
                 },
-                "shellTraces": list(self._shell_traces.get(session_id or "", [])) if session_id else [],
+                "shellTraces": list(self._shell_traces.get(session_id or "", []))
+                if session_id
+                else [],
             },
             session_id=session_id,
         )
@@ -613,7 +624,9 @@ class WebUIChannel(BaseChannel):
 
     async def _handle_model_config_update(self, request: web.Request) -> web.Response:
         if not self._model_settings:
-            return self._json_response({"ok": False, "error": "model_settings_unavailable"}, status=503)
+            return self._json_response(
+                {"ok": False, "error": "model_settings_unavailable"}, status=503
+            )
         try:
             body = await request.json()
         except Exception:
@@ -633,7 +646,9 @@ class WebUIChannel(BaseChannel):
 
     async def _handle_model_config_test(self, request: web.Request) -> web.Response:
         if not self._model_settings:
-            return self._json_response({"ok": False, "error": "model_settings_unavailable"}, status=503)
+            return self._json_response(
+                {"ok": False, "error": "model_settings_unavailable"}, status=503
+            )
         try:
             body = await request.json()
         except Exception:
@@ -673,7 +688,9 @@ class WebUIChannel(BaseChannel):
 
     async def _handle_knowledge_config_update(self, request: web.Request) -> web.Response:
         if not self._knowledge_settings:
-            return self._json_response({"ok": False, "error": "knowledge_settings_unavailable"}, status=503)
+            return self._json_response(
+                {"ok": False, "error": "knowledge_settings_unavailable"}, status=503
+            )
         try:
             body = await request.json()
         except Exception:
@@ -692,7 +709,9 @@ class WebUIChannel(BaseChannel):
 
     async def _handle_knowledge_config_test(self, request: web.Request) -> web.Response:
         if not self._knowledge_settings:
-            return self._json_response({"ok": False, "error": "knowledge_settings_unavailable"}, status=503)
+            return self._json_response(
+                {"ok": False, "error": "knowledge_settings_unavailable"}, status=503
+            )
         try:
             body = await request.json()
         except Exception:
@@ -716,9 +735,14 @@ class WebUIChannel(BaseChannel):
         upload_service = self._upload_service()
         if upload_service is None:
             logger.warning("WebUI upload rejected because session manager is unavailable")
-            return self._json_response({"ok": False, "error": "session_manager_unavailable"}, status=503)
+            return self._json_response(
+                {"ok": False, "error": "session_manager_unavailable"}, status=503
+            )
         if not request.content_type.startswith("multipart/"):
-            logger.warning("WebUI upload rejected because request is not multipart: contentType={}", request.content_type)
+            logger.warning(
+                "WebUI upload rejected because request is not multipart: contentType={}",
+                request.content_type,
+            )
             return self._json_response({"ok": False, "error": "multipart_required"}, status=400)
 
         session_id = self._browser_session_from_request(request, create=True)
@@ -758,8 +782,12 @@ class WebUIChannel(BaseChannel):
             logger.warning("WebUI upload rejected because session id is missing")
             return self._json_response({"ok": False, "error": "missing_session"}, status=400)
         if file_content is None:
-            logger.warning("WebUI upload rejected because file field is missing: sessionId={}", session_id)
-            return self._json_response({"ok": False, "error": "missing_file"}, session_id=session_id, status=400)
+            logger.warning(
+                "WebUI upload rejected because file field is missing: sessionId={}", session_id
+            )
+            return self._json_response(
+                {"ok": False, "error": "missing_file"}, session_id=session_id, status=400
+            )
 
         try:
             record = await asyncio.to_thread(
@@ -768,7 +796,9 @@ class WebUIChannel(BaseChannel):
                 content=file_content,
                 session_id=session_id,
                 case_name=form_values.get("caseName") or form_values.get("case_name"),
-                investigator_name=form_values.get("investigatorName") or form_values.get("investigator_name"),
+                case_id=form_values.get("caseId") or form_values.get("case_id"),
+                investigator_name=form_values.get("investigatorName")
+                or form_values.get("investigator_name"),
             )
         except UploadProcessingError as exc:
             logger.warning(
@@ -777,7 +807,9 @@ class WebUIChannel(BaseChannel):
                 file_name,
                 exc,
             )
-            return self._json_response({"ok": False, "error": str(exc)}, session_id=session_id, status=400)
+            return self._json_response(
+                {"ok": False, "error": str(exc)}, session_id=session_id, status=400
+            )
 
         logger.info(
             "WebUI upload request completed: sessionId={} uploadId={} status={} kind={} sizeBytes={}",
@@ -798,7 +830,9 @@ class WebUIChannel(BaseChannel):
         except Exception:
             return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
 
-        session_id = body.get("sessionId") or self._browser_session_from_request(request, create=True)
+        session_id = body.get("sessionId") or self._browser_session_from_request(
+            request, create=True
+        )
         text = str(body.get("text") or "").strip()
         case_id = body.get("caseId") or body.get("case_id")
         artifact_id = body.get("artifactId") or body.get("artifact_id")
@@ -814,7 +848,9 @@ class WebUIChannel(BaseChannel):
         if not session_id:
             return self._json_response({"ok": False, "error": "missing_session"}, status=400)
         if not text and not upload_ids:
-            return self._json_response({"ok": False, "error": "empty_text"}, session_id=session_id, status=400)
+            return self._json_response(
+                {"ok": False, "error": "empty_text"}, session_id=session_id, status=400
+            )
         if not case_name or not investigator_name:
             return self._json_response(
                 {"ok": False, "error": "missing_case_setup"},
@@ -834,13 +870,17 @@ class WebUIChannel(BaseChannel):
             **({"artifact_id": artifact_id} if artifact_id else {}),
             "case_name": case_name,
             "investigator_name": investigator_name,
+            "user_query": text or "첨부 파일 분석",
         }
         content = text
         media: list[str] = []
         if upload_ids:
             upload_service = self._upload_service()
             if upload_service is None:
-                logger.warning("WebUI chat rejected because upload service is unavailable: sessionId={}", session_id)
+                logger.warning(
+                    "WebUI chat rejected because upload service is unavailable: sessionId={}",
+                    session_id,
+                )
                 return self._json_response(
                     {"ok": False, "error": "session_manager_unavailable"},
                     session_id=session_id,
@@ -899,7 +939,9 @@ class WebUIChannel(BaseChannel):
         except Exception:
             return self._json_response({"ok": False, "error": "invalid_json"}, status=400)
 
-        session_id = body.get("sessionId") or self._browser_session_from_request(request, create=False)
+        session_id = body.get("sessionId") or self._browser_session_from_request(
+            request, create=False
+        )
         case_id = body.get("caseId") or body.get("case_id")
         artifact_id = body.get("artifactId") or body.get("artifact_id")
         case_name = str(body.get("caseName") or body.get("case_name") or "").strip()
@@ -974,7 +1016,9 @@ class WebUIChannel(BaseChannel):
         return ws
 
     async def _handle_sessions_list(self, request: web.Request) -> web.Response:
-        session_id = request.query.get("sessionId") or self._browser_session_from_request(request, create=False)
+        session_id = request.query.get("sessionId") or self._browser_session_from_request(
+            request, create=False
+        )
         if not session_id:
             return self._json_response({"sessions": []})
         if not self._session_manager:
@@ -985,7 +1029,9 @@ class WebUIChannel(BaseChannel):
         )
 
     async def _handle_session_detail(self, request: web.Request) -> web.Response:
-        browser_session_id = request.query.get("sessionId") or self._browser_session_from_request(request, create=False)
+        browser_session_id = request.query.get("sessionId") or self._browser_session_from_request(
+            request, create=False
+        )
         if not browser_session_id:
             return self._json_response({"error": "missing_session"}, status=400)
         if not self._session_manager:
@@ -994,7 +1040,9 @@ class WebUIChannel(BaseChannel):
         session_key = request.match_info["session_key"]
         session = self._find_browser_session(browser_session_id, session_key)
         if session is None:
-            return self._json_response({"error": "session_not_found"}, session_id=browser_session_id, status=404)
+            return self._json_response(
+                {"error": "session_not_found"}, session_id=browser_session_id, status=404
+            )
 
         scope = parse_scoped_session_key(session.key)
         messages = [
@@ -1044,6 +1092,20 @@ class WebUIChannel(BaseChannel):
         manifest = self._case_manifest(case_dir)
         evidence_ids = self._directory_names(case_dir / "evidence")
         source_ids = self._directory_names(case_dir / "sources")
+        store = self._case_store()
+        context = await asyncio.to_thread(store.collect_context, case_id) if store else None
+
+        def items(values):
+            return [
+                {
+                    "id": item.id,
+                    "metadata": item.metadata,
+                    "files": item.files,
+                    "verification": item.verification,
+                }
+                for item in values
+            ]
+
         return self._json_response(
             {
                 "case": {
@@ -1051,8 +1113,42 @@ class WebUIChannel(BaseChannel):
                     "manifest": manifest,
                     "evidenceIds": evidence_ids,
                     "sourceIds": source_ids,
+                    "sources": items(context.sources) if context else [],
+                    "evidence": items(context.evidence) if context else [],
                 }
             }
+        )
+
+    async def _handle_case_create(self, request: web.Request) -> web.Response:
+        store = self._case_store()
+        if store is None:
+            return self._json_response({"error": "session_manager_unavailable"}, status=503)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("invalid_json")
+            name = str(body.get("caseName") or "").strip()
+            investigator = str(body.get("investigatorName") or "").strip()
+            if not name or not investigator or len(name) > 200 or len(investigator) > 100:
+                raise ValueError("case_setup_required")
+            from forensic_claw.forensics.case import derive_case_id
+
+            case_id = str(body.get("caseId") or derive_case_id(name))
+            if store.exists(case_id):
+                return self._json_response({"error": "case_already_exists"}, status=409)
+            manifest = await asyncio.to_thread(
+                store.ensure_case, case_name=name, investigator_name=investigator, case_id=case_id
+            )
+        except (ValueError, TypeError):
+            return self._json_response({"error": "case_setup_required"}, status=400)
+        return self._json_response(
+            {
+                "case": {
+                    **self._case_summary(store.case_dir(manifest["caseId"])),
+                    "manifest": manifest,
+                }
+            },
+            status=201,
         )
 
     async def _handle_case_report(self, request: web.Request) -> web.Response:
@@ -1067,6 +1163,11 @@ class WebUIChannel(BaseChannel):
             {
                 "caseId": case_dir.name,
                 "content": report_path.read_text(encoding="utf-8"),
+                "formats": [
+                    extension
+                    for extension in ("pdf", "html", "md", "json")
+                    if (case_dir / f"report.{extension}").is_file()
+                ],
             }
         )
 
@@ -1081,6 +1182,61 @@ class WebUIChannel(BaseChannel):
             return self._json_response({"error": "graph_not_found"}, status=404)
         return self._json_response({"caseId": case_dir.name, "graph": graph})
 
+    async def _handle_report_download(self, request: web.Request) -> web.Response:
+        format = request.query.get("format", "pdf")
+        if format not in {"md", "html", "pdf", "json"}:
+            return self._json_response({"error": "invalid_report_format"}, status=400)
+        case_dir = self._case_dir(request.match_info["case_id"])
+        if case_dir is None:
+            return self._json_response({"error": "case_not_found"}, status=404)
+        path = self._resolve_child(case_dir, f"report.{format}")
+        if path is None or not path.is_file():
+            return self._json_response({"error": "report_not_found"}, status=404)
+        return web.FileResponse(
+            path,
+            headers={
+                "Content-Disposition": f'attachment; filename="report.{format}"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    async def _handle_case_timeline(self, request: web.Request) -> web.Response:
+        case_dir = self._case_dir(request.match_info["case_id"])
+        if case_dir is None:
+            return self._json_response({"error": "case_not_found"}, status=404)
+        path = self._resolve_child(case_dir, "timeline.jsonl")
+        entries = (
+            [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            if path and path.is_file()
+            else []
+        )
+        return self._json_response({"caseId": case_dir.name, "entries": entries})
+
+    async def _handle_case_wiki(self, request: web.Request) -> web.Response:
+        case_dir = self._case_dir(request.match_info["case_id"])
+        if case_dir is None:
+            return self._json_response({"error": "case_not_found"}, status=404)
+        path = self._resolve_child(case_dir, "wiki/evidence.md")
+        return self._json_response(
+            {
+                "caseId": case_dir.name,
+                "content": path.read_text(encoding="utf-8") if path and path.is_file() else "",
+            }
+        )
+
+    async def _handle_tasks(self, request: web.Request) -> web.Response:
+        workspace = self._workspace_root
+        records = []
+        if workspace:
+            for path in sorted((workspace / "tasks").glob("*.json"), reverse=True):
+                record = self._load_json_file(path)
+                if isinstance(record, dict) and (
+                    not request.query.get("caseId")
+                    or record.get("caseId") == request.query["caseId"]
+                ):
+                    records.append(record)
+        return self._json_response({"tasks": records})
+
     async def _handle_evidence_detail(self, request: web.Request) -> web.Response:
         case_dir = self._case_dir(request.match_info["case_id"])
         if case_dir is None:
@@ -1092,6 +1248,16 @@ class WebUIChannel(BaseChannel):
             return self._json_response({"error": "evidence_not_found"}, status=404)
 
         metadata = self._load_json_file(evidence_dir / "metadata.json")
+        store = self._case_store()
+        if store:
+            context = await asyncio.to_thread(store.collect_context, case_dir.name)
+            item = (
+                next((item for item in context.evidence if item.id == evidence_dir.name), None)
+                if context
+                else None
+            )
+            if item:
+                metadata = {**item.metadata, "verification": item.verification}
         return self._json_response(
             {
                 "caseId": case_dir.name,
@@ -1112,6 +1278,16 @@ class WebUIChannel(BaseChannel):
             return self._json_response({"error": "source_not_found"}, status=404)
 
         metadata = self._load_json_file(source_dir / "metadata.json")
+        store = self._case_store()
+        if store:
+            context = await asyncio.to_thread(store.collect_context, case_dir.name)
+            item = (
+                next((item for item in context.sources if item.id == source_dir.name), None)
+                if context
+                else None
+            )
+            if item:
+                metadata = {**item.metadata, "verification": item.verification}
         return self._json_response(
             {
                 "caseId": case_dir.name,

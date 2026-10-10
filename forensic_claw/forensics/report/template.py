@@ -11,7 +11,7 @@ from importlib import resources
 
 from forensic_claw.forensics.report.models import ReportSpec
 
-DEFAULT_TEMPLATE_ID = "knpa_forensic_report"
+DEFAULT_TEMPLATE_ID = "forensic_report"
 _TEMPLATES_PACKAGE = "forensic_claw.forensics.report.templates"
 
 
@@ -25,5 +25,5 @@ def load_template(template_id: str = DEFAULT_TEMPLATE_ID) -> ReportSpec:
 
 
 def default_template() -> ReportSpec:
-    """Load the standard KNPA digital-forensics report template."""
+    """Load the general forensic report template (not an official agency form)."""
     return load_template(DEFAULT_TEMPLATE_ID)

@@ -12,6 +12,8 @@ from typing import Any
 
 from loguru import logger
 
+from forensic_claw.forensics.trust import is_local_endpoint
+
 
 class Embedder:
     """Compute text embeddings via an OpenAI-compatible endpoint."""
@@ -42,6 +44,9 @@ class Embedder:
 
     def _get_client(self) -> Any | None:
         if not self.ready:
+            return None
+        if not is_local_endpoint(self.api_base):
+            logger.warning("Evidence embeddings require a loopback API endpoint")
             return None
         if self._client is not None and self._client_base == self.api_base:
             return self._client

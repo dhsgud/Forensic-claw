@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
+from forensic_claw.config.schema import KnowledgeConfig, VectorConfig
 from forensic_claw.forensics import CaseStore
 from forensic_claw.forensics.report import (
     ReportGenerator,
@@ -14,6 +16,7 @@ from forensic_claw.forensics.report import (
     default_template,
     load_template,
 )
+from forensic_claw.knowledge.service import KnowledgeService
 from forensic_claw.utils.hashing import calculate_file_hashes
 
 
@@ -34,7 +37,19 @@ class _FakeProvider:
 
     async def chat_with_retry(self, *, messages, tools=None, model=None, temperature=0.1, **_):
         self.calls.append(messages)
-        return _FakeResponse("근거에 기반한 서술 본문입니다.")
+        evidence = json.loads(messages[-1]["content"].split("[근거 JSON]\n", 1)[1])
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "claims": [
+                        {
+                            "text": evidence[0]["text"].splitlines()[0],
+                            "evidence_ids": [evidence[0]["evidenceId"]],
+                        }
+                    ]
+                }
+            )
+        )
 
 
 class _ErrorProvider(_FakeProvider):
@@ -43,51 +58,20 @@ class _ErrorProvider(_FakeProvider):
         return _FakeResponse("Error calling LLM: upstream failed", finish_reason="error")
 
 
-class _FakeKnowledge:
-    enabled = True
-
-    def __init__(self, with_hits: bool = True, *, case_name: str | None = None):
-        self.with_hits = with_hits
-        self.case_name = case_name
-
-    def search(self, query, *, limit=8, include_graph=True):
-        if not self.with_hits:
-            return {"hits": []}
-        return {
-            "hits": [
-                {
-                    "text": f"{query} 관련 근거 라인",
-                    "sourcePath": "C:/evidence/system.log",
-                    "kind": "text_log",
-                    "metadata": {"caseName": self.case_name} if self.case_name else {},
-                }
-            ]
-        }
-
-
-class _MixedCaseKnowledge:
-    enabled = True
-
-    def __init__(self, *, case_name: str):
-        self.case_name = case_name
-
-    def search(self, query, *, limit=8, include_graph=True):
-        return {
-            "hits": [
-                {
-                    "text": f"{query} target case evidence",
-                    "sourcePath": "C:/evidence/target.log",
-                    "kind": "text_log",
-                    "metadata": {"caseName": self.case_name},
-                },
-                {
-                    "text": f"{query} unrelated case evidence",
-                    "sourcePath": "C:/evidence/other.log",
-                    "kind": "text_log",
-                    "metadata": {"caseName": "Other Case"},
-                },
-            ]
-        }
+def _knowledge(tmp_path, case_name, *, with_hits=True, mixed=False):
+    service = KnowledgeService(tmp_path, KnowledgeConfig(vector=VectorConfig(enabled=False)))
+    if with_hits:
+        target = tmp_path / "target.log"
+        target.write_text(
+            "사건 개요 분석 목적 배경 로그인 실패 종합 결론 요약 target case evidence\n",
+            encoding="utf-8",
+        )
+        assert service.ingest_path(target, case_name=case_name).ready
+    if mixed:
+        other = tmp_path / "other.log"
+        other.write_text("사건 개요 로그인 실패 종합 unrelated case evidence\n", encoding="utf-8")
+        assert service.ingest_path(other, case_name="Other Case").ready
+    return service
 
 
 def _make_context(tmp_path: Path):
@@ -133,7 +117,7 @@ async def test_generate_fills_data_and_llm_sections(tmp_path: Path):
     generator = ReportGenerator(
         provider=_FakeProvider(),
         model="fake-model",
-        knowledge_service=_FakeKnowledge(with_hits=True, case_name=context.case_name),
+        knowledge_service=_knowledge(tmp_path, context.case_name),
         app_version="9.9.9",
     )
     report = await generator.generate(context)
@@ -149,10 +133,10 @@ async def test_generate_fills_data_and_llm_sections(tmp_path: Path):
     assert by_id["overview"].used_llm is True
     assert by_id["results"].used_llm is True
     assert "참고 출처" in by_id["results"].markdown
-    assert "C:/evidence/system.log" in by_id["results"].markdown
+    assert "target.log" in by_id["results"].markdown
 
     markdown = report.to_markdown()
-    assert markdown.startswith("# 디지털 증거분석 결과보고서")
+    assert markdown.startswith("# 디지털 포렌식 분석 보고서")
     assert "## 1. 분석 개요" in markdown
 
 
@@ -165,7 +149,7 @@ async def test_llm_sections_fall_back_without_evidence(tmp_path: Path):
     generator = ReportGenerator(
         provider=provider,
         model="fake-model",
-        knowledge_service=_FakeKnowledge(with_hits=False),
+        knowledge_service=_knowledge(tmp_path, context.case_name, with_hits=False),
     )
     report = await generator.generate(context)
 
@@ -196,10 +180,7 @@ async def test_report_service_writes_report_md(tmp_path: Path, monkeypatch: pyte
         workspace=tmp_path,
         provider=_FakeProvider(),
         model="fake-model",
-        knowledge_service=_FakeKnowledge(
-            with_hits=True,
-            case_name=store.collect_context(case_id).case_name,
-        ),
+        knowledge_service=_knowledge(tmp_path, store.collect_context(case_id).case_name),
         app_version="1.0.0",
     )
     seen: list[tuple[int, int, str]] = []
@@ -213,7 +194,7 @@ async def test_report_service_writes_report_md(tmp_path: Path, monkeypatch: pyte
     report_path = Path(result["reportPath"])
     assert report_path.is_file()
     assert report_path.name == "report.md"
-    assert "# 디지털 증거분석 결과보고서" in report_path.read_text(encoding="utf-8")
+    assert "# 디지털 포렌식 분석 보고서" in report_path.read_text(encoding="utf-8")
     assert expected_sha256 in report_path.read_text(encoding="utf-8")
     # Progress callback fired once per section.
     assert len(seen) == 9
@@ -240,7 +221,7 @@ async def test_llm_sections_ignore_hits_from_other_cases(tmp_path: Path):
     generator = ReportGenerator(
         provider=provider,
         model="fake-model",
-        knowledge_service=_MixedCaseKnowledge(case_name=context.case_name),
+        knowledge_service=_knowledge(tmp_path, context.case_name, mixed=True),
     )
     report = await generator.generate(context)
 
@@ -251,8 +232,8 @@ async def test_llm_sections_ignore_hits_from_other_cases(tmp_path: Path):
     assert "unrelated case evidence" not in prompts
 
     by_id = {section.id: section for section in report.sections}
-    assert "C:/evidence/target.log" in by_id["results"].markdown
-    assert "C:/evidence/other.log" not in by_id["results"].markdown
+    assert "target.log" in by_id["results"].markdown
+    assert "other.log" not in by_id["results"].markdown
 
 
 @pytest.mark.asyncio
@@ -264,7 +245,7 @@ async def test_llm_sections_fall_back_when_provider_returns_error(tmp_path: Path
     generator = ReportGenerator(
         provider=provider,
         model="fake-model",
-        knowledge_service=_FakeKnowledge(with_hits=True, case_name=context.case_name),
+        knowledge_service=_knowledge(tmp_path, context.case_name),
     )
     report = await generator.generate(context)
 

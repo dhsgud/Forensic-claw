@@ -52,6 +52,7 @@ class SearchHit:
     rank: float
     text: str
     metadata: dict[str, Any]
+    sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,7 @@ class KnowledgeBackend(ABC):
         query_embedding: list[float] | None = None,
         limit: int = 8,
         include_graph: bool = True,
+        case_id: str | None = None,
     ) -> dict[str, Any]:
         """Return ``{"hits": [...], "graph": [...], "graphView": {...}}``.
 

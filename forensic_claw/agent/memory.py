@@ -62,6 +62,7 @@ def _normalize_save_memory_args(args: Any) -> dict[str, Any] | None:
         return args[0] if args and isinstance(args[0], dict) else None
     return args if isinstance(args, dict) else None
 
+
 _TOOL_CHOICE_ERROR_MARKERS = (
     "tool_choice",
     "toolchoice",
@@ -109,7 +110,9 @@ class MemoryStore:
         for message in messages:
             if not message.get("content"):
                 continue
-            tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
+            tools = (
+                f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
+            )
             lines.append(
                 f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
             )
@@ -124,6 +127,12 @@ class MemoryStore:
         """Consolidate the provided message chunk into MEMORY.md + HISTORY.md."""
         if not messages:
             return True
+        from forensic_claw.forensics.trust import is_local_endpoint
+
+        endpoint = getattr(provider, "api_base", None)
+        if isinstance(endpoint, str) and not is_local_endpoint(endpoint):
+            logger.warning("Remote memory consolidation blocked to preserve local evidence")
+            return False
 
         current_memory = self.read_long_term()
         prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
@@ -135,7 +144,10 @@ class MemoryStore:
 {self._format_messages(messages)}"""
 
         chat_messages = [
-            {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."},
+            {
+                "role": "system",
+                "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation.",
+            },
             {"role": "user", "content": prompt},
         ]
 
@@ -148,9 +160,7 @@ class MemoryStore:
                 tool_choice=forced,
             )
 
-            if response.finish_reason == "error" and _is_tool_choice_unsupported(
-                response.content
-            ):
+            if response.finish_reason == "error" and _is_tool_choice_unsupported(response.content):
                 logger.warning("Forced tool_choice unsupported, retrying with auto")
                 response = await provider.chat_with_retry(
                     messages=chat_messages,
@@ -182,7 +192,9 @@ class MemoryStore:
             update = args["memory_update"]
 
             if entry is None or update is None:
-                logger.warning("Memory consolidation: save_memory payload contains null required fields")
+                logger.warning(
+                    "Memory consolidation: save_memory payload contains null required fields"
+                )
                 return self._fail_or_raw_archive(messages)
 
             entry = _ensure_text(entry).strip()
@@ -215,12 +227,9 @@ class MemoryStore:
         """Fallback: dump raw messages to HISTORY.md without LLM summarization."""
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         self.append_history(
-            f"[{ts}] [RAW] {len(messages)} messages\n"
-            f"{self._format_messages(messages)}"
+            f"[{ts}] [RAW] {len(messages)} messages\n{self._format_messages(messages)}"
         )
-        logger.warning(
-            "Memory consolidation degraded: raw-archived {} messages", len(messages)
-        )
+        logger.warning("Memory consolidation degraded: raw-archived {} messages", len(messages))
 
 
 class MemoryConsolidator:
@@ -284,7 +293,7 @@ class MemoryConsolidator:
     def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
         history = session.get_history(max_messages=0)
-        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+        channel, chat_id = session.key.split(":", 1) if ":" in session.key else (None, None)
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -348,7 +357,7 @@ class MemoryConsolidator:
                     return
 
                 end_idx = boundary[0]
-                chunk = session.messages[session.last_consolidated:end_idx]
+                chunk = session.messages[session.last_consolidated : end_idx]
                 if not chunk:
                     return
 

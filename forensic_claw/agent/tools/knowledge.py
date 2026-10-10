@@ -30,6 +30,16 @@ class _KnowledgeTool(Tool):
         self.service = service
         self.workspace = workspace
         self.allowed_dir = allowed_dir
+        self.case_id: str | None = None
+        self.case_name: str | None = None
+        self.investigator_name: str | None = None
+
+    def set_context(self, metadata: dict[str, Any]) -> None:
+        self.case_id = metadata.get("case_id") or metadata.get("caseId")
+        self.case_name = metadata.get("case_name") or metadata.get("caseName") or self.case_id
+        self.investigator_name = metadata.get("investigator_name") or metadata.get(
+            "investigatorName"
+        )
 
     def _resolve(self, path: str) -> Path:
         candidate = Path(path).expanduser()
@@ -111,8 +121,9 @@ class KnowledgeIngestTool(_KnowledgeTool):
             recursive=recursive,
             file_globs=file_globs,
             max_files=max_files,
-            case_name=case_name,
-            investigator_name=investigator_name,
+            case_name=self.case_name or case_name,
+            case_id=self.case_id,
+            investigator_name=self.investigator_name or investigator_name,
         )
         return self.service.result_to_text(result)
 
@@ -163,6 +174,7 @@ class KnowledgeSearchTool(_KnowledgeTool):
             query,
             limit=limit,
             include_graph=include_graph,
+            case_id=self.case_id,
         )
         return json.dumps(data, ensure_ascii=False, indent=2)
 

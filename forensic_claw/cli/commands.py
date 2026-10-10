@@ -1197,6 +1197,35 @@ def plugins_list():
 # ============================================================================
 
 
+@app.command("evaluate-model")
+def evaluate_model(
+    pi_config: Path = typer.Option(
+        Path.home() / ".pi" / "agent" / "models.json", "--pi-config",
+        help="Pi models.json (credentials are read without being exported)",
+    ),
+    provider: str | None = typer.Option(None, "--provider", help="Pi provider name"),
+    output: Path = typer.Option(Path("model-evaluation"), "--output", help="JSON/HTML result directory"),
+    repetitions: int = typer.Option(3, "--repetitions", min=1, max=10),
+):
+    """Measure a live model against 20 synthetic questions and independent ground truth."""
+    from forensic_claw.forensics.evaluation import load_pi_connection, run_evaluation
+
+    try:
+        connection = load_pi_connection(pi_config, provider)
+        console.print("Evaluating synthetic evidence only; API credentials and URL are not exported.")
+        report = asyncio.run(run_evaluation(connection, output, repetitions=repetitions,
+                                            progress=lambda message: console.print(message)))
+    except (OSError, ValueError, KeyError, TypeError):
+        console.print("[red]Unable to load Pi configuration or write results; check file/options.[/red]")
+        raise typer.Exit(1) from None
+    score = report["summary"]["question_accuracy"]
+    console.print(f"Question accuracy: {score['correct']}/{score['total']} ({score['rate']:.1%})")
+    console.print(f"Actual model: {', '.join(report['actual_models']) or '(no successful responses)'}")
+    console.print(f"Results: {(output / 'model-evaluation.html').resolve()}")
+    if report["summary"]["api_errors"]:
+        raise typer.Exit(1)
+
+
 @app.command()
 def status():
     """Show forensic-claw status."""

@@ -31,6 +31,8 @@ const state = {
   graphDrag: null,
   dragDepth: 0,
   pendingReportCaseId: "",
+  view: "chat",
+  caseMaterial: null,
 };
 
 const SETUP_STORAGE_KEY = "forensic_claw_webui_setup_v1";
@@ -81,6 +83,7 @@ const graphZoomIn = document.querySelector("#graph-zoom-in");
 const graphCanvas = document.querySelector("#graph-canvas");
 const graphDetail = document.querySelector("#graph-detail");
 const composerShell = document.querySelector(".composer-shell");
+const dropTarget = document.querySelector(".workspace");
 const composer = document.querySelector("#composer");
 const messageInput = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
@@ -110,6 +113,62 @@ const vectorDimensions = document.querySelector("#vector-dimensions");
 const knowledgeTest = document.querySelector("#knowledge-test");
 const knowledgeSave = document.querySelector("#knowledge-save");
 const knowledgeSummary = document.querySelector("#knowledge-summary");
+const caseWorkspace = document.querySelector("#case-workspace");
+const fileInput = document.querySelector("#evidence-file");
+const caseCreateDialog = document.querySelector("#case-create-dialog");
+const workspaceStop = document.querySelector("#workspace-stop");
+
+function setWorkbenchView(view) {
+  state.view = view;
+  for (const button of document.querySelectorAll(".workspace-tab")) {
+    const active = button.dataset.view === view;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  }
+  chatLog.hidden = view !== "chat";
+  composerShell.hidden = view !== "chat";
+  caseWorkspace.hidden = view === "chat";
+  caseWorkspace.setAttribute("aria-labelledby", `view-${view}`);
+  document.querySelector("#case-page-title").textContent = view === "report" ? "분석 보고서" : "증거와 기록";
+  if (view !== "chat") closeGraphPanel();
+  if (state.caseMaterial) renderCaseDetail(...state.caseMaterial);
+  else caseDetail.innerHTML = '<div class="empty-state">왼쪽에서 사건을 선택하거나 새 사건을 만들어 주세요.</div>';
+  if (view !== "chat" && currentScope().caseId) loadCase(currentScope().caseId, { quiet: true });
+}
+
+function showChatWelcome() {
+  if (chatLog.children.length) return;
+  chatLog.innerHTML = `<section id="chat-welcome" class="chat-welcome">
+    <span class="welcome-mark" aria-hidden="true">FC</span>
+    <p class="eyebrow">FORENSIC WORKSPACE</p><h2>증거에서 시작하는 분석</h2>
+    <p>사건에 파일을 추가하고, 확인하고 싶은 내용을 질문하세요.<br>결과의 근거와 검증 상태를 함께 확인할 수 있습니다.</p>
+    <div class="workflow-steps"><span><b>01</b> 사건 선택</span><span><b>02</b> 자료 추가</span><span><b>03</b> 근거 확인</span><span><b>04</b> 보고서</span></div>
+    <button type="button" class="send-button material-picker">＋ 첫 자료 추가</button>
+    <p class="welcome-hint">로그 · 브라우저 기록 · Windows 아티팩트 · 문서</p></section>`;
+  chatLog.querySelector("button").addEventListener("click", () => fileInput.click());
+}
+
+function displayTime(value) {
+  const date = new Date(value);
+  return value && !Number.isNaN(date.getTime()) ? date.toLocaleString("ko-KR") : value || "시각 정보 없음";
+}
+
+function gradeBadge(grade) {
+  const labels = { VERIFIED: "교차 근거 확인", PARTIAL: "단일 근거 확인", FLAGGED: "검토 필요", UNVERIFIED: "미검증" };
+  const value = Object.hasOwn(labels, grade) ? grade : "UNVERIFIED";
+  return `<span class="grade-badge grade-${value.toLowerCase()}">${value}<small>${labels[value]}</small></span>`;
+}
+
+function activateCaseProfile(caseData) {
+  const manifest = caseData.manifest || {};
+  persistSetup({ caseId: caseData.id, caseName: manifest.caseName || caseData.title || caseData.id,
+    investigatorName: manifest.investigatorName || state.caseProfile?.investigatorName || "" });
+  activeSessionTitle.textContent = state.caseProfile.caseName;
+  sessionBadge.textContent = "선택됨";
+  sessionMeta.textContent = `${state.caseProfile.caseName} · ${state.caseProfile.investigatorName || "분석관 미지정"}`;
+  updateScopeSummary();
+}
 
 function openSettings() {
   if (!settingsDialog) return;
@@ -202,15 +261,15 @@ function knowledgeBackendLabel() {
 
 function syncKnowledgeBackendUi() {
   if (knowledgeTest) {
-    knowledgeTest.textContent = `Test ${knowledgeBackendLabel()}`;
-    knowledgeTest.setAttribute("aria-label", `Test ${knowledgeBackendLabel()} connection`);
+    knowledgeTest.textContent = "저장소 확인";
+    knowledgeTest.setAttribute("aria-label", "로컬 저장소 연결 확인");
   }
 }
 
 function syncSetupKnowledgeBackendUi() {
   if (setupTestDb) {
-    setupTestDb.textContent = `Test ${knowledgeBackendLabel()}`;
-    setupTestDb.setAttribute("aria-label", `Test ${knowledgeBackendLabel()} connection`);
+    setupTestDb.textContent = "저장소 확인";
+    setupTestDb.setAttribute("aria-label", "로컬 저장소 연결 확인");
   }
 }
 
@@ -412,9 +471,16 @@ async function completeInitialSetup(event) {
     renderModelConfig(data.modelConfig);
     renderKnowledgeConfig(knowledgeData.knowledgeConfig);
     renderSetupKnowledgeConfig(knowledgeData.knowledgeConfig);
-    persistSetup({ caseName, investigatorName });
+    const existing = await apiJson("/api/cases");
+    let selected = (existing.cases || []).find((item) => item.title === caseName);
+    if (!selected) {
+      selected = (await apiJson("/api/cases", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caseName, investigatorName }) })).case;
+    }
+    persistSetup({ caseId: selected.id, caseName, investigatorName });
     applySetupVisibility();
-    activeSessionTitle.textContent = caseName;
+    await selectCase(selected.id);
+    await refreshCases();
     setStatus(`${caseName} 케이스를 시작했습니다.`);
   } catch (error) {
     setupStatus.textContent = `설정 저장 실패: ${error.message}`;
@@ -511,6 +577,17 @@ function isMarkdownBlockBoundary(line) {
   );
 }
 
+function markdownTableCells(line) {
+  return String(line || "").trim().replace(/^\||\|$/g, "")
+    .split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+function isMarkdownTable(header, divider) {
+  const cells = markdownTableCells(divider);
+  return String(header || "").includes("|") && cells.length === markdownTableCells(header).length
+    && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
 function renderMarkdown(text) {
   const source = String(text || "").replace(/\r\n?/g, "\n").trim();
   if (!source) {
@@ -562,6 +639,20 @@ function renderMarkdown(text) {
       continue;
     }
 
+    if (isMarkdownTable(rawLine, lines[index + 1])) {
+      const header = markdownTableCells(rawLine);
+      index += 2;
+      const rows = [];
+      while (index < lines.length && lines[index].includes("|")) {
+        const cells = markdownTableCells(lines[index]);
+        if (cells.length !== header.length) break;
+        rows.push(`<tr>${cells.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`);
+        index += 1;
+      }
+      blocks.push(`<div class="markdown-table"><table><thead><tr>${header.map((cell) => `<th scope="col">${renderInlineMarkdown(cell)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`);
+      continue;
+    }
+
     if (/^>\s?/.test(trimmed)) {
       const quoteLines = [];
       while (index < lines.length && /^>\s?/.test(lines[index].trim())) {
@@ -593,7 +684,7 @@ function renderMarkdown(text) {
     }
 
     const paragraphLines = [];
-    while (index < lines.length && !isMarkdownBlockBoundary(lines[index])) {
+    while (index < lines.length && !isMarkdownBlockBoundary(lines[index]) && !isMarkdownTable(lines[index], lines[index + 1])) {
       paragraphLines.push(lines[index]);
       index += 1;
     }
@@ -619,27 +710,38 @@ function roleForNode(node) {
 
 function setStatus(text) {
   statusLine.textContent = text;
+  document.querySelector("#workspace-feedback").textContent = text;
 }
 
 function setConnection(online) {
-  connectionStatus.textContent = online ? "online" : "offline";
+  connectionStatus.textContent = online ? "연결됨" : "연결 끊김";
   connectionStatus.classList.toggle("online", online);
 }
 
 function updateComposerActions() {
   const hasBusyAttachment = state.attachments.some((item) => item.status === "uploading" || item.status === "processing");
   sendButton.disabled = !state.caseProfile || !state.sessionId || state.isStopping || hasBusyAttachment;
-  sendButton.textContent = state.isStopping ? "Stopping..." : state.isGenerating ? "Stop" : "Send";
+  sendButton.textContent = state.isStopping ? "중지 중…" : state.isGenerating ? "분석 중지" : "분석 요청";
+  const busy = state.isGenerating || state.isStopping || hasBusyAttachment;
+  document.querySelector("#new-case").disabled = busy;
+  artifactIdInput.disabled = busy;
+  for (const button of document.querySelectorAll(".material-row")) button.disabled = busy;
+  for (const button of document.querySelectorAll(".file-picker, .material-picker")) button.disabled = busy;
+  fileInput.disabled = busy;
+  for (const button of document.querySelectorAll(".attachment-remove")) button.disabled = busy;
+  workspaceStop.hidden = !state.isGenerating && !state.isStopping;
+  workspaceStop.disabled = state.isStopping;
+  for (const button of document.querySelectorAll(".case-select, .case-report-button")) button.disabled = busy;
   sendButton.classList.toggle("is-stop", state.isGenerating || state.isStopping);
   sendButton.setAttribute(
     "aria-label",
     hasBusyAttachment
-      ? "Wait for attachments to finish processing"
+      ? "파일 처리가 완료되면 분석할 수 있습니다"
       : state.isStopping
-        ? "Stopping response generation"
+        ? "분석 중지 요청 중"
         : state.isGenerating
-          ? "Stop response generation"
-          : "Send message"
+          ? "분석 중지"
+          : "분석 요청"
   );
 }
 
@@ -663,7 +765,7 @@ function stopScope() {
   if (state.activeSessionKey) {
     return parseSessionScope(state.activeSessionKey);
   }
-  return currentScope();
+  return { caseId: currentScope().caseId, artifactId: "" };
 }
 
 function freezeAssistantNode(node) {
@@ -1311,6 +1413,7 @@ function decorateToolMessage(node, content) {
 }
 
 function makeMessage(role, content, metaText = "", extraClass = "", options = {}) {
+  document.querySelector("#chat-welcome")?.remove();
   const template = document.querySelector("#message-template");
   const node = template.content.firstElementChild.cloneNode(true);
   node.classList.add(role);
@@ -1346,13 +1449,8 @@ function setCaseDetailStatus(text, tone = "") {
 }
 
 function updateScopeSummary() {
-  const scope = currentScope();
-  const label = scopeLabel(scope);
-  scopeSummary.textContent =
-    label === "base"
-      ? "기본 브라우저 세션에 연결됩니다."
-      : `현재 scope: ${label}`;
-  activeScope.textContent = label;
+  scopeSummary.textContent = "분석은 현재 사건의 전체 증거를 대상으로 합니다. 아래 증거 식별자는 상세 조회에 사용합니다.";
+  activeScope.textContent = "전체 증거";
 }
 
 function parseSessionScope(sessionKey) {
@@ -1438,15 +1536,15 @@ function formatBytes(bytes) {
 }
 
 function attachmentLabel(item) {
-  if (item.error) return `failed: ${item.error}`;
-  if (item.status === "uploading") return "uploading";
-  if (item.status === "processing") return "processing";
-  if (item.status === "ready") return "RAG ready";
-  if (item.status === "vision_metadata_indexed") return "vision indexed";
-  if (item.status === "vision_metadata_ready") return "vision metadata";
-  if (item.status === "stored_pending_parser") return "stored";
-  if (item.status === "stored_unsupported") return "unsupported";
-  return item.status || "stored";
+  if (item.error) return `처리 실패: ${item.error}`;
+  if (item.status === "uploading") return "업로드 중";
+  if (item.status === "processing") return "자료 분석 중";
+  if (item.status === "ready") return "분석 준비 완료";
+  if (item.status === "vision_metadata_indexed") return "이미지 정보 등록 완료";
+  if (item.status === "vision_metadata_ready") return "이미지 정보 준비 완료";
+  if (item.status === "stored_pending_parser") return "보관 완료 · 분석기 준비 필요";
+  if (item.status === "stored_unsupported") return "보관 완료 · 분석 미지원 형식";
+  return "보관 완료";
 }
 
 function attachmentHashLabel(item) {
@@ -1531,6 +1629,7 @@ async function uploadAttachment(file) {
 
   const form = new FormData();
   form.append("sessionId", state.sessionId || "");
+  form.append("caseId", currentScope().caseId);
   form.append("caseName", state.caseProfile.caseName);
   form.append("investigatorName", state.caseProfile.investigatorName);
   form.append("file", file, file.name);
@@ -1544,6 +1643,7 @@ async function uploadAttachment(file) {
       error: "",
     });
     setStatus(`${file.name} 처리 완료: ${attachmentLabel(data.upload || {})}`);
+    await refreshCases();
   } catch (error) {
     updateAttachment(clientId, {
       status: "failed",
@@ -1554,6 +1654,10 @@ async function uploadAttachment(file) {
 }
 
 function handleDroppedFiles(fileList) {
+  if (state.isGenerating || state.isStopping || state.attachments.some((item) => ["uploading", "processing"].includes(item.status))) {
+    setStatus("현재 작업이 끝난 뒤 파일을 추가해 주세요.");
+    return;
+  }
   const files = Array.from(fileList || []).filter((file) => file && file.name);
   if (!files.length) return;
   for (const file of files) {
@@ -1566,6 +1670,7 @@ function handleDroppedFiles(fileList) {
 
 function setDropActive(active) {
   composerShell?.classList.toggle("drag-active", active);
+  dropTarget.classList.toggle("drag-active", active);
   if (dropHint) {
     dropHint.hidden = !active;
   }
@@ -1684,153 +1789,121 @@ async function saveKnowledgeConfig() {
 
 function renderCases() {
   casesList.innerHTML = "";
-  if (!state.cases.length) {
-    setEmpty(casesList, "아직 case 폴더가 없습니다.");
-    return;
-  }
-
+  if (!state.cases.length) { setEmpty(casesList, "새 사건을 만들고 자료를 추가하세요."); return; }
   for (const item of state.cases) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "session-item";
-    if (state.activeCase && state.activeCase.id === item.id) {
-      button.classList.add("active");
-    }
-    button.innerHTML = `
-      <strong>${escapeHtml(item.title || item.id)}</strong>
-      <small>${escapeHtml(item.id)}</small>
-      <small>${escapeHtml(item.summary || "요약 없음")}</small>
-      <small>${escapeHtml(`evidence ${item.evidenceCount || 0} · source ${item.sourceCount || 0}`)}</small>
-    `;
-    button.addEventListener("click", () => selectCase(item.id));
+    button.className = "session-item case-select";
+    button.classList.toggle("active", state.activeCase?.id === item.id);
+    button.setAttribute("aria-pressed", String(state.activeCase?.id === item.id));
+    button.disabled = state.isGenerating || state.isStopping || state.attachments.some((item) => ["uploading", "processing"].includes(item.status));
+    button.innerHTML = `<strong>${escapeHtml(item.title || item.id)}</strong><small>원본 ${item.sourceCount || 0} · 분석 증거 ${item.evidenceCount || 0}</small>`;
+    button.addEventListener("click", () => selectCase(item.id).catch((error) => setStatus(error.message)));
     casesList.appendChild(button);
   }
 }
 
-function renderCaseDetail(caseData, reportContent = "", graph = null) {
+function renderCaseDetail(caseData, reportContent = "", graph = null, timeline = [], wiki = "", tasks = [], formats = ["md"]) {
   state.activeCase = caseData;
+  state.caseMaterial = [caseData, reportContent, graph, timeline, wiki, tasks, formats];
   refreshSuggestionLists();
   renderCases();
-
-  caseSummary.textContent =
-    caseData.summary || `${caseData.id} case를 읽었습니다. evidence ${caseData.evidenceIds.length}개, source ${caseData.sourceIds.length}개`;
+  caseSummary.textContent = `${caseData.title || caseData.id} · ${caseData.manifest?.investigatorName || "분석관 미지정"}`;
   caseDetail.innerHTML = "";
-
-  const headerCard = document.createElement("section");
-  headerCard.className = "detail-card";
-  headerCard.innerHTML = `
-    <h3>${escapeHtml(caseData.title || caseData.id)}</h3>
-    <p class="detail-meta">${escapeHtml(caseData.id)} · ${escapeHtml(caseData.status || "draft")}</p>
-    <pre class="detail-block">${escapeHtml(JSON.stringify(caseData.manifest || {}, null, 2))}</pre>
-  `;
-  const reportButton = document.createElement("button");
-  reportButton.type = "button";
-  reportButton.className = "ghost-button case-report-button";
-  reportButton.textContent = "Generate Report";
-  reportButton.addEventListener("click", () => generateCaseReport(caseData.id));
-  headerCard.insertBefore(reportButton, headerCard.querySelector(".detail-block"));
-  caseDetail.appendChild(headerCard);
-
-  const evidenceCard = document.createElement("section");
-  evidenceCard.className = "detail-card";
-  evidenceCard.innerHTML = '<h3>Evidence</h3><div class="token-row"></div>';
-  const evidenceRow = evidenceCard.querySelector(".token-row");
-  if ((caseData.evidenceIds || []).length) {
-    for (const evidenceId of caseData.evidenceIds) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "token-button";
-      if (artifactIdInput.value.trim() === evidenceId) {
-        button.classList.add("active");
+  if (state.view === "report") {
+    artifactDetail.hidden = true;
+    const card = document.createElement("section");
+    card.className = "detail-card report-card";
+    card.innerHTML = `<div class="section-heading"><div><h3>포렌식 분석 보고서</h3><p class="subtle">검토용 초안 · 제출 전에 근거와 결론을 확인하세요.</p></div><button type="button" class="send-button case-report-button">${reportContent ? "보고서 다시 생성" : "보고서 생성"}</button></div><div class="download-row"></div>${reportContent ? `<div class="markdown-rendered detail-markdown">${renderMarkdown(reportContent)}</div>` : '<div class="empty-state">아직 보고서가 없습니다. 자료를 추가한 뒤 보고서를 생성하세요.</div>'}`;
+    card.querySelector("button").addEventListener("click", () => generateCaseReport(caseData.id).catch((error) => setStatus(error.message)));
+    if (reportContent) {
+      for (const format of ["pdf", "html", "md", "json"].filter((value) => formats.includes(value))) {
+        const link = document.createElement("a");
+        link.className = "ghost-button download-link";
+        link.textContent = format === "json" ? "검증 기록 (JSON)" : `${format.toUpperCase()} 다운로드`;
+        link.href = `/api/cases/${encodeURIComponent(caseData.id)}/report/download?format=${format}`;
+        link.download = `report.${format}`;
+        card.querySelector(".download-row").appendChild(link);
       }
-      button.textContent = evidenceId;
-      button.addEventListener("click", () => selectArtifact(evidenceId));
-      evidenceRow.appendChild(button);
     }
-  } else {
-    evidenceRow.innerHTML = '<span class="subtle">등록된 evidence가 없습니다.</span>';
+    caseDetail.appendChild(card);
+    updateComposerActions();
+    return;
   }
-  caseDetail.appendChild(evidenceCard);
-
-  const sourceCard = document.createElement("section");
-  sourceCard.className = "detail-card";
-  sourceCard.innerHTML = '<h3>Sources</h3><div class="token-row"></div>';
-  const sourceRow = sourceCard.querySelector(".token-row");
-  if ((caseData.sourceIds || []).length) {
-    for (const sourceId of caseData.sourceIds) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "token-button";
-      if (artifactIdInput.value.trim() === sourceId) {
-        button.classList.add("active");
-      }
-      button.textContent = sourceId;
-      button.addEventListener("click", () => selectArtifact(sourceId));
-      sourceRow.appendChild(button);
+  artifactDetail.hidden = false;
+  const sources = caseData.sources || [];
+  const unverified = sources.filter((item) => item.metadata?.grade === "UNVERIFIED").length;
+  const summary = document.createElement("section");
+  summary.className = "case-stats";
+  summary.innerHTML = `<div><span>수집한 원본</span><strong>${caseData.sourceIds?.length || 0}<small>건</small></strong></div><div><span>분석 증거</span><strong>${caseData.evidenceIds?.length || 0}<small>건</small></strong></div><div class="${unverified ? "stat-warning" : ""}"><span>원본 재검증 필요</span><strong>${unverified}<small>건</small></strong></div>`;
+  caseDetail.appendChild(summary);
+  const materials = document.createElement("section");
+  materials.className = "detail-card";
+  materials.innerHTML = '<div class="section-heading"><div><h3>사건 자료</h3><p class="subtle">원본의 무결성과 분석 결과를 확인하세요.</p></div><button type="button" class="ghost-button">＋ 파일 추가</button></div><div class="material-list"></div>';
+  materials.querySelector("button").classList.add("material-picker");
+  materials.querySelector("button").addEventListener("click", () => fileInput.click());
+  const list = materials.querySelector(".material-list");
+  for (const [kind, items] of [["source", sources], ["evidence", caseData.evidence || []]]) {
+    for (const item of items) {
+      const metadata = item.metadata || {};
+      const name = (metadata.originalPath || metadata.sourcePath || metadata.fileName || metadata.title || item.id).split(/[\\/]/).pop();
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "material-row";
+      row.classList.toggle("active", artifactIdInput.value === item.id);
+      row.innerHTML = `<span class="material-icon" aria-hidden="true">${kind === "source" ? "원" : "증"}</span><span class="material-name"><strong>${escapeHtml(name)}</strong><small>${kind === "source" ? "수집 원본" : "분석 증거"} · ${escapeHtml(item.id)}</small></span>${gradeBadge(metadata.grade)}<span aria-hidden="true">›</span>`;
+      row.addEventListener("click", () => selectArtifact(item.id).catch((error) => setStatus(error.message)));
+      list.appendChild(row);
     }
-  } else {
-    sourceRow.innerHTML = '<span class="subtle">등록된 source가 없습니다.</span>';
   }
-  caseDetail.appendChild(sourceCard);
-
-  if (reportContent) {
-    const reportCard = document.createElement("section");
-    reportCard.className = "detail-card";
-    reportCard.innerHTML = `
-      <h3>Report</h3>
-      <div class="markdown-rendered detail-markdown">${renderMarkdown(reportContent)}</div>
-    `;
-    caseDetail.appendChild(reportCard);
+  if (!list.children.length) list.innerHTML = '<div class="empty-state">등록된 자료가 없습니다. 로그나 문서 파일을 추가해 시작하세요.</div>';
+  caseDetail.appendChild(materials);
+  const legend = document.createElement("details");
+  legend.className = "detail-card grade-legend";
+  legend.innerHTML = `<summary>검증 상태는 무엇을 뜻하나요?</summary><div class="grade-legend-grid">${["VERIFIED", "PARTIAL", "FLAGGED", "UNVERIFIED"].map(gradeBadge).join("")}</div><p class="subtle">VERIFIED는 독립 원본 간 근거 확인, PARTIAL은 단일 원본 근거 확인입니다. FLAGGED는 근거 불일치, UNVERIFIED는 필수 정보나 무결성 검증 부족을 뜻합니다. 등급은 사실의 확정이나 법적 판단을 대신하지 않습니다.</p>`;
+  caseDetail.appendChild(legend);
+  const timelineCard = document.createElement("section");
+  timelineCard.className = "detail-card";
+  timelineCard.innerHTML = `<h3>시간 흐름 <small>${timeline.length}개 기록</small></h3><p class="subtle">표시 시각: 브라우저의 현지 시간 · 최대 최근 100건</p><ol class="timeline-list"></ol>`;
+  for (const entry of [...timeline].sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp))).slice(0, 100)) {
+    const row = document.createElement("li");
+    row.innerHTML = `<time>${escapeHtml(displayTime(entry.timestamp))}</time><span>${escapeHtml(entry.timestampKind === "registry_key_last_written" ? "레지스트리 키 최종 수정" : "기록 시각")}</span><p>${escapeHtml(entry.text || entry.title || entry.summary || entry.evidenceId || "증거 기록")}</p>`;
+    timelineCard.querySelector("ol").appendChild(row);
   }
-
-  if (graph) {
-    const graphCard = document.createElement("section");
-    graphCard.className = "detail-card";
-    graphCard.innerHTML = `
-      <h3>Graph</h3>
-      <pre class="detail-block">${escapeHtml(JSON.stringify(graph, null, 2))}</pre>
-    `;
-    caseDetail.appendChild(graphCard);
+  if (!timeline.length) timelineCard.querySelector("ol").innerHTML = '<li class="subtle">시간 정보가 포함된 자료를 추가하면 기록이 표시됩니다.</li>';
+  caseDetail.appendChild(timelineCard);
+  if (graph?.nodes?.length) {
+    const graphButton = document.createElement("button");
+    graphButton.type = "button";
+    graphButton.className = "ghost-button";
+    graphButton.textContent = "증거 관계 보기";
+    graphButton.addEventListener("click", () => { setWorkbenchView("chat"); openGraphPanel(normalizeGraphView(graph)); });
+    caseDetail.appendChild(graphButton);
   }
+  for (const [title, content] of [["증거 등록 기록", wiki ? renderMarkdown(wiki) : "증거 등록 기록이 없습니다."], ["백그라운드 작업", tasks.length ? tasks.map((task) => `<div class="task-row"><strong>${escapeHtml(task.label || task.id)}</strong><span>${escapeHtml(({ running: "진행 중", completed: "완료", failed: "실패", cancelled: "취소", interrupted: "중단됨" })[task.status] || task.status)}</span>${task.result ? `<details><summary>작업 결과</summary><pre class="detail-block">${escapeHtml(task.result)}</pre></details>` : ""}</div>`).join("") : "진행 중인 작업이 없습니다."]]) {
+    const card = document.createElement("details");
+    card.className = "detail-card";
+    card.innerHTML = `<summary>${title}</summary><div class="detail-markdown markdown-rendered">${content}</div>`;
+    caseDetail.appendChild(card);
+  }
+  updateComposerActions();
 }
 
-function clearCaseDetail(message = "선택된 case가 없습니다.") {
+function clearCaseDetail(message = "사건을 선택해 주세요.") {
   state.activeCase = null;
+  state.caseMaterial = null;
   caseSummary.textContent = message;
-  caseDetail.innerHTML = "";
+  caseDetail.innerHTML = `<div class="empty-state">${escapeHtml(message)}</div>`;
   artifactDetail.innerHTML = "";
-  setCaseDetailStatus("idle");
+  setCaseDetailStatus("대기");
   renderCases();
   refreshSuggestionLists();
 }
 
 function renderArtifactDetail(kind, detail) {
-  artifactDetail.innerHTML = "";
-
-  const card = document.createElement("section");
-  card.className = "detail-card";
-  card.innerHTML = `
-    <h3>${escapeHtml(kind === "source" ? "Selected Source" : "Selected Evidence")}</h3>
-    <p class="detail-meta">${escapeHtml(kind === "source" ? detail.sourceId : detail.evidenceId)}</p>
-    <pre class="detail-block">${escapeHtml(JSON.stringify(detail.metadata || {}, null, 2))}</pre>
-  `;
-  artifactDetail.appendChild(card);
-
-  const filesCard = document.createElement("section");
-  filesCard.className = "detail-card";
-  filesCard.innerHTML = '<h3>Files</h3><div class="file-list"></div>';
-  const fileList = filesCard.querySelector(".file-list");
-  if ((detail.files || []).length) {
-    for (const filePath of detail.files) {
-      const row = document.createElement("code");
-      row.className = "file-chip";
-      row.textContent = filePath;
-      fileList.appendChild(row);
-    }
-  } else {
-    fileList.innerHTML = '<span class="subtle">관련 파일이 없습니다.</span>';
-  }
-  artifactDetail.appendChild(filesCard);
+  const metadata = detail.metadata || {};
+  artifactDetail.innerHTML = `<section class="detail-card selected-artifact"><div class="section-heading"><h3>${kind === "source" ? "선택한 원본" : "선택한 분석 증거"}</h3>${gradeBadge(metadata.grade)}</div><dl class="artifact-properties"><dt>식별자</dt><dd>${escapeHtml(detail.sourceId || detail.evidenceId)}</dd><dt>원본 경로</dt><dd>${escapeHtml(metadata.originalPath || metadata.sourcePath || "메타데이터에서 확인")}</dd><dt>수집 시각</dt><dd>${escapeHtml(displayTime(metadata.timestamp))}</dd></dl><details><summary>상세 메타데이터와 파일</summary><pre class="detail-block">${escapeHtml(JSON.stringify({ metadata, verification: detail.verification, files: detail.files }, null, 2))}</pre></details></section>`;
+  artifactDetail.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function resetUiForFreshBrowserSession() {
@@ -1867,7 +1940,15 @@ async function bootstrap({ reset = false } = {}) {
   updateComposerActions();
   applySetupVisibility();
   await connectSocket();
+  await refreshCases();
   await refreshSessions();
+  if (state.caseProfile) {
+    let selected = state.cases.find((item) => item.id === state.caseProfile.caseId || (!state.caseProfile.caseId && item.title === state.caseProfile.caseName));
+    if (!selected) selected = (await apiJson("/api/cases", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state.caseProfile) })).case;
+    await selectCase(selected.id);
+  }
+  showChatWelcome();
   setStatus(reset ? "새 WebUI 세션을 시작했습니다." : "준비되었습니다.");
 }
 
@@ -1977,7 +2058,7 @@ function handleSocketEvent(event) {
     }
     if (event.sessionKey) {
       state.activeSessionKey = event.sessionKey;
-      activeSessionTitle.textContent = event.sessionKey;
+      activeSessionTitle.textContent = state.caseProfile?.caseName || "사건 분석";
     }
     state.isGenerating = true;
     updateComposerActions();
@@ -2016,7 +2097,7 @@ function handleSocketEvent(event) {
   if (event.type === "message") {
     if (event.sessionKey) {
       state.activeSessionKey = event.sessionKey;
-      activeSessionTitle.textContent = event.sessionKey;
+      activeSessionTitle.textContent = state.caseProfile?.caseName || "사건 분석";
     }
     const wasStopRequested = state.stopRequested;
     if (state.isGenerating || state.isStopping) {
@@ -2074,11 +2155,11 @@ async function refreshSessions() {
     if (session.key === state.activeSessionKey) {
       button.classList.add("active");
     }
-    const label = scopeLabel({ caseId: session.caseId || "", artifactId: session.artifactId || "" });
+    const label = state.cases.find((item) => item.id === session.caseId)?.title || session.caseId || "일반 대화";
     button.innerHTML = `
       <strong>${escapeHtml(label)}</strong>
-      <small>${escapeHtml(session.preview || "(no preview)")}</small>
-      <small>${escapeHtml(session.updatedAt || "")}</small>
+      <small>${escapeHtml(session.preview || "대화 내용 없음")}</small>
+      <small>${escapeHtml(displayTime(session.updatedAt))}</small>
     `;
     button.addEventListener("click", () => loadSession(session));
     sessionsList.appendChild(button);
@@ -2110,16 +2191,21 @@ async function loadCase(caseId, { quiet = false } = {}) {
     return;
   }
 
-  setCaseDetailStatus("loading");
+  setCaseDetailStatus("확인 중…");
   try {
     const detail = await apiJson(`/api/cases/${encodeURIComponent(caseId)}`);
-    const [reportData, graphData] = await Promise.all([
+    const [reportData, graphData, timelineData, wikiData, taskData] = await Promise.all([
       apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/report`),
       apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/graph`),
+      apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/timeline`),
+      apiJsonOptional(`/api/cases/${encodeURIComponent(caseId)}/wiki`),
+      apiJsonOptional(`/api/tasks?caseId=${encodeURIComponent(caseId)}`),
     ]);
 
-    renderCaseDetail(detail.case, reportData?.content || "", graphData?.graph || null);
-    setCaseDetailStatus("loaded", "success");
+    if (caseIdInput.value.trim() !== caseId) return;
+    renderCaseDetail(detail.case, reportData?.content || "", graphData?.graph || null,
+      timelineData?.entries || [], wikiData?.content || "", taskData?.tasks || [], reportData?.formats || ["md"]);
+    setCaseDetailStatus("최신 상태 확인", "success");
 
     const artifactId = artifactIdInput.value.trim();
     if (artifactId) {
@@ -2156,6 +2242,7 @@ async function loadArtifact(caseId, artifactId, caseData = state.activeCase) {
       : `/api/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(artifactId)}`;
   try {
     const detail = await apiJson(url);
+    if (currentScope().caseId !== caseId || currentScope().artifactId !== artifactId) return;
     renderArtifactDetail(kind, detail);
   } catch (error) {
     artifactDetail.innerHTML = "";
@@ -2164,6 +2251,7 @@ async function loadArtifact(caseId, artifactId, caseData = state.activeCase) {
 }
 
 async function loadSession(session) {
+  if (state.isGenerating || state.isStopping || state.attachments.some((item) => ["uploading", "processing"].includes(item.status))) return;
   const data = await apiJson(
     `/api/sessions/${encodeURIComponent(session.key)}?sessionId=${encodeURIComponent(state.sessionId)}`
   );
@@ -2173,9 +2261,15 @@ async function loadSession(session) {
   }
 
   state.activeSessionKey = data.session.key;
-  activeSessionTitle.textContent = data.session.key;
   caseIdInput.value = data.session.caseId || "";
   artifactIdInput.value = data.session.artifactId || "";
+  state.attachments = [];
+  renderAttachments();
+  if (data.session.caseId) {
+    await loadCase(data.session.caseId);
+    if (state.activeCase) activateCaseProfile(state.activeCase);
+  }
+  setWorkbenchView("chat");
   updateScopeSummary();
 
   state.pendingAssistant = null;
@@ -2310,7 +2404,7 @@ async function sendMessage(event) {
       body: JSON.stringify({
         sessionId: state.sessionId,
         caseId: currentScope().caseId,
-        artifactId: currentScope().artifactId,
+        artifactId: "",
         caseName: state.caseProfile.caseName,
         investigatorName: state.caseProfile.investigatorName,
         text: rawText,
@@ -2338,10 +2432,21 @@ async function sendMessage(event) {
 }
 
 async function selectCase(caseId) {
+  if (state.isGenerating || state.isStopping || state.attachments.some((item) => ["uploading", "processing"].includes(item.status))) return;
+  const changed = caseIdInput.value !== caseId;
   caseIdInput.value = caseId;
   artifactIdInput.value = "";
-  updateScopeSummary();
   await loadCase(caseId);
+  if (state.activeCase?.id !== caseId) return;
+  activateCaseProfile(state.activeCase);
+  if (changed) {
+    state.activeSessionKey = null;
+    state.attachments = [];
+    renderAttachments();
+    chatLog.innerHTML = "";
+    showChatWelcome();
+    closeGraphPanel();
+  }
 }
 
 async function selectArtifact(artifactId) {
@@ -2349,8 +2454,49 @@ async function selectArtifact(artifactId) {
   updateScopeSummary();
   if (caseIdInput.value.trim()) {
     await loadArtifact(caseIdInput.value.trim(), artifactId);
+    if (state.caseMaterial) renderCaseDetail(...state.caseMaterial);
   }
 }
+
+for (const tab of document.querySelectorAll(".workspace-tab")) {
+  tab.addEventListener("click", () => setWorkbenchView(tab.dataset.view));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...document.querySelectorAll(".workspace-tab")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click();
+    tabs[next].focus();
+  });
+}
+fileInput.addEventListener("change", () => { handleDroppedFiles(fileInput.files); fileInput.value = ""; });
+document.querySelector("#pick-file").addEventListener("click", () => fileInput.click());
+document.querySelector("#new-case").addEventListener("click", () => {
+  document.querySelector("#case-create-name").value = "";
+  document.querySelector("#case-create-investigator").value = state.caseProfile?.investigatorName || "";
+  document.querySelector("#case-create-status").textContent = "";
+  caseCreateDialog.showModal();
+});
+document.querySelector("#case-create-close").addEventListener("click", () => caseCreateDialog.close());
+document.querySelector("#case-create-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('[type="submit"]');
+  const status = document.querySelector("#case-create-status");
+  button.disabled = true;
+  try {
+    const result = await apiJson("/api/cases", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ caseName: document.querySelector("#case-create-name").value.trim(), investigatorName: document.querySelector("#case-create-investigator").value.trim() }) });
+    await selectCase(result.case.id);
+    await refreshCases();
+    caseCreateDialog.close();
+    setWorkbenchView("chat");
+    setStatus("새 사건을 만들었습니다. 자료를 추가해 주세요.");
+  } catch (error) {
+    status.textContent = error.message.includes("case_already_exists") ? "같은 이름의 사건이 있습니다. 사건 목록에서 선택하거나 다른 이름을 입력하세요." : `사건 생성 실패: ${error.message}`;
+  } finally { button.disabled = false; }
+});
+workspaceStop.addEventListener("click", () => requestStop().catch((error) => setStatus(error.message)));
 
 document.querySelector("#refresh-sessions").addEventListener("click", () => {
   refreshSessions().catch((error) => setStatus(`세션 새로고침 실패: ${error.message}`));
@@ -2359,10 +2505,10 @@ document.querySelector("#refresh-cases").addEventListener("click", () => {
   refreshCases().catch((error) => setStatus(`case 새로고침 실패: ${error.message}`));
 });
 document.querySelector("#clear-scope").addEventListener("click", () => {
-  caseIdInput.value = "";
   artifactIdInput.value = "";
   updateScopeSummary();
-  clearCaseDetail();
+  artifactDetail.innerHTML = "";
+  if (state.caseMaterial) renderCaseDetail(...state.caseMaterial);
 });
 
 modelProvider?.addEventListener("change", syncDefaultApiBaseFromProvider);
@@ -2468,7 +2614,7 @@ caseIdInput.addEventListener("change", () => {
     clearCaseDetail();
     return;
   }
-  loadCase(caseId).catch((error) => setStatus(`scope 반영 실패: ${error.message}`));
+  selectCase(caseId).catch((error) => setStatus(`사건 선택 실패: ${error.message}`));
 });
 artifactIdInput.addEventListener("change", () => {
   const caseId = caseIdInput.value.trim();
@@ -2480,13 +2626,13 @@ artifactIdInput.addEventListener("change", () => {
   loadArtifact(caseId, artifactId).catch((error) => setStatus(`artifact 반영 실패: ${error.message}`));
 });
 
-composerShell?.addEventListener("dragenter", (event) => {
+dropTarget.addEventListener("dragenter", (event) => {
   if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
   event.preventDefault();
   state.dragDepth += 1;
   setDropActive(true);
 });
-composerShell?.addEventListener("dragover", (event) => {
+dropTarget.addEventListener("dragover", (event) => {
   if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
   event.preventDefault();
   if (event.dataTransfer) {
@@ -2494,14 +2640,14 @@ composerShell?.addEventListener("dragover", (event) => {
   }
   setDropActive(true);
 });
-composerShell?.addEventListener("dragleave", (event) => {
+dropTarget.addEventListener("dragleave", (event) => {
   if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
   state.dragDepth = Math.max(0, state.dragDepth - 1);
   if (state.dragDepth === 0) {
     setDropActive(false);
   }
 });
-composerShell?.addEventListener("drop", (event) => {
+dropTarget.addEventListener("drop", (event) => {
   if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
   event.preventDefault();
   state.dragDepth = 0;

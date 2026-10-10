@@ -42,7 +42,7 @@ _BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec("/hash", "Calculate MD5, SHA256, and SHA512 for a local file"),
     BuiltinCommandSpec("/model", "Show or change the local model endpoint"),
     BuiltinCommandSpec("/knowledge", "Show or prepare the local RAG and graph evidence store"),
-    BuiltinCommandSpec("/report", "Generate a case report from the local police-form template"),
+    BuiltinCommandSpec("/report", "Generate a checked forensic report in Markdown, HTML and PDF"),
     BuiltinCommandSpec("/help", "Show available commands"),
 )
 
@@ -117,8 +117,10 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content=build_status_content(
-            version=__version__, model=loop.model,
-            start_time=loop._start_time, last_usage=loop._last_usage,
+            version=__version__,
+            model=loop.model,
+            start_time=loop._start_time,
+            last_usage=loop._last_usage,
             context_window_tokens=loop.context_window_tokens,
             session_msg_count=len(session.get_history(max_messages=0)),
             context_tokens_estimate=ctx_est,
@@ -131,7 +133,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     """Start a fresh session."""
     loop = ctx.loop
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
-    snapshot = session.messages[session.last_consolidated:]
+    snapshot = session.messages[session.last_consolidated :]
     session.clear()
     loop.sessions.save(session)
     loop.sessions.invalidate(session.key)
@@ -141,7 +143,8 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     if ctx.msg.channel == "webui":
         metadata["webui_reset_browser_session"] = True
     return OutboundMessage(
-        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
         content="New session started.",
         metadata=metadata,
     )
@@ -287,7 +290,9 @@ def _resolve_hash_command_path(
             return matches[0]
         if len(matches) > 1:
             preview = "\n".join(f"- {item}" for item in matches[:8])
-            raise ValueError(f"multiple files named '{raw_path}' were found. Use a path:\n{preview}")
+            raise ValueError(
+                f"multiple files named '{raw_path}' were found. Use a path:\n{preview}"
+            )
 
     raise FileNotFoundError(raw_path)
 
@@ -468,10 +473,13 @@ async def cmd_knowledge(ctx: CommandContext) -> OutboundMessage:
         action, _, rest = args.partition(" ")
         action = action.lower()
         if action == "ingest" and rest.strip():
+            from forensic_claw.session.scopes import parse_scoped_session_key
+
             result = await asyncio.to_thread(
                 service.ingest_path,
                 rest.strip(),
                 case_name=(ctx.msg.metadata or {}).get("case_name"),
+                case_id=parse_scoped_session_key(ctx.key).case_id,
                 investigator_name=(ctx.msg.metadata or {}).get("investigator_name"),
             )
             return OutboundMessage(
@@ -481,14 +489,13 @@ async def cmd_knowledge(ctx: CommandContext) -> OutboundMessage:
                 metadata={"render_as": "text"},
             )
         if action == "search" and rest.strip():
-            content = service.search(rest.strip())
-        else:
-            text = (
-                "Usage:\n"
-                "/knowledge status\n"
-                "/knowledge ingest <path>\n"
-                "/knowledge search <query>"
+            from forensic_claw.session.scopes import parse_scoped_session_key
+
+            content = await asyncio.to_thread(
+                service.search, rest.strip(), case_id=parse_scoped_session_key(ctx.key).case_id
             )
+        else:
+            text = "Usage:\n/knowledge status\n/knowledge ingest <path>\n/knowledge search <query>"
             return OutboundMessage(
                 channel=ctx.msg.channel,
                 chat_id=ctx.msg.chat_id,
@@ -510,7 +517,9 @@ async def cmd_report(ctx: CommandContext) -> OutboundMessage:
     provider = getattr(loop, "provider", None)
     workspace = getattr(loop, "workspace", None)
     if provider is None or workspace is None:
-        return _report_text(ctx, "보고서를 생성할 수 없습니다: 모델 또는 워크스페이스가 설정되지 않았습니다.")
+        return _report_text(
+            ctx, "보고서를 생성할 수 없습니다: 모델 또는 워크스페이스가 설정되지 않았습니다."
+        )
 
     from forensic_claw.forensics import CaseStore, derive_case_id
     from forensic_claw.forensics.report import ReportService
@@ -530,6 +539,7 @@ async def cmd_report(ctx: CommandContext) -> OutboundMessage:
         try:
             manifest = await asyncio.to_thread(
                 CaseStore(workspace).ensure_case,
+                case_id=case_id,
                 case_name=case_name,
                 investigator_name=investigator_name or None,
             )
@@ -567,7 +577,7 @@ async def cmd_report(ctx: CommandContext) -> OutboundMessage:
 
     llm_sections = sum(1 for section in result.get("sections", []) if section.get("usedLlm"))
     header = (
-        f"'{case_id}' 케이스 보고서를 생성했습니다 (report.md, "
+        f"'{case_id}' 케이스 보고서를 생성했습니다 (Markdown / HTML / PDF / 검증 JSON, "
         f"서술 섹션 {llm_sections}개).\n\n"
     )
     return OutboundMessage(
