@@ -108,8 +108,7 @@ async def test_system_message_uses_session_key_override_for_persistence(tmp_path
     assert response is not None
     assert response.chat_id == "sess_123"
     session = loop.sessions.get_or_create("webui:sess_123:case:case-2026-0001:artifact:EVD-001")
-    assert any(
-        "검증된 사건 근거가 없어" in str(message.get("content", "")) for message in session.messages
-    )
+    assert session.messages[-1]["content"] == response.content
+    assert "background result" not in response.content
 
     await asyncio.gather(*loop._background_tasks, return_exceptions=True)

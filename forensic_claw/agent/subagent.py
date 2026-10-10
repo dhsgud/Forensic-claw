@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from forensic_claw.agent.skills import BUILTIN_SKILLS_DIR
+from forensic_claw.agent.tools.acquire_hives import AcquireRegistryHivesTool
 from forensic_claw.agent.tools.filesystem import (
     EditFileTool,
     ListDirTool,
@@ -17,7 +19,11 @@ from forensic_claw.agent.tools.filesystem import (
     WriteFileTool,
 )
 from forensic_claw.agent.tools.hashing import HashVerifyTool
-from forensic_claw.agent.tools.knowledge import KnowledgeIngestTool, KnowledgeSearchTool
+from forensic_claw.agent.tools.knowledge import (
+    KnowledgeDiscoverTool,
+    KnowledgeIngestTool,
+    KnowledgeSearchTool,
+)
 from forensic_claw.agent.tools.registry import ToolRegistry
 from forensic_claw.agent.tools.shell import ExecTool
 from forensic_claw.agent.tools.web import WebFetchTool, WebSearchTool
@@ -26,7 +32,9 @@ from forensic_claw.bus.queue import MessageBus
 from forensic_claw.config.schema import ExecToolConfig, WebSearchConfig
 from forensic_claw.forensics.trust import (
     CLAIM_INSTRUCTION,
+    COLLECTION_RETRY_INSTRUCTION,
     EVIDENCE_TOOLS,
+    INVESTIGATION_INSTRUCTION,
     HallucinationDetector,
 )
 from forensic_claw.providers.base import LLMProvider
@@ -170,8 +178,10 @@ class SubagentManager:
             )
             tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
             tools.register(WebFetchTool(proxy=self.web_proxy))
+            if sys.platform == "win32":
+                tools.register(AcquireRegistryHivesTool(workspace=self.workspace))
             if self.knowledge_service:
-                for cls in (KnowledgeIngestTool, KnowledgeSearchTool):
+                for cls in (KnowledgeDiscoverTool, KnowledgeIngestTool, KnowledgeSearchTool):
                     tool = cls(
                         self.knowledge_service, workspace=self.workspace, allowed_dir=allowed_dir
                     )
@@ -185,6 +195,7 @@ class SubagentManager:
             ]
             case_id = (metadata or {}).get("case_id") or (metadata or {}).get("caseId")
             grounded_hits = []
+            collection_retry = False
             evidence_mode = bool(case_id and self.knowledge_service)
             if evidence_mode and not await asyncio.to_thread(evidence_allowed, self.provider):
                 raise ValueError(BLOCKED_MESSAGE)
@@ -193,7 +204,10 @@ class SubagentManager:
                 grounded_hits.extend(data.get("hits", []))
                 messages.extend(
                     [
-                        {"role": "system", "content": CLAIM_INSTRUCTION},
+                        {
+                            "role": "system",
+                            "content": INVESTIGATION_INSTRUCTION + CLAIM_INSTRUCTION,
+                        },
                         {
                             "role": "user",
                             "content": "[검증된 사건 근거 JSON]\n"
@@ -259,7 +273,25 @@ class SubagentManager:
                                 "content": result,
                             }
                         )
+                    if evidence_mode and any(
+                        tc.name == "knowledge_ingest" for tc in response.tool_calls
+                    ):
+                        data = await asyncio.to_thread(
+                            self.knowledge_service.search, task, case_id=case_id
+                        )
+                        grounded_hits.extend(data.get("hits", []))
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "[검증된 사건 근거 JSON]\n"
+                                + json.dumps(grounded_hits, ensure_ascii=False),
+                            }
+                        )
                 else:
+                    if evidence_mode and not grounded_hits and not collection_retry:
+                        collection_retry = True
+                        messages.append({"role": "system", "content": COLLECTION_RETRY_INSTRUCTION})
+                        continue
                     final_result = response.content
                     break
 
@@ -270,7 +302,7 @@ class SubagentManager:
                 final_result = (
                     HallucinationDetector().check_response(final_result, grounded_hits)[0]
                     if grounded_hits
-                    else "검증된 사건 근거가 없어 분석 결과를 생성하지 않았습니다. 추가 수집·검토 필요."
+                    else "자동 조사에서 사건 근거를 확보하지 못했습니다. 조사할 대상·경로를 알려주거나 파일을 추가해 주세요."
                 )
                 metadata = {**(metadata or {}), "trust_checked": True}
 

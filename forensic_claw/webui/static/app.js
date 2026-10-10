@@ -142,10 +142,10 @@ function showChatWelcome() {
   chatLog.innerHTML = `<section id="chat-welcome" class="chat-welcome">
     <div class="welcome-illustration" aria-hidden="true"><span class="scene-line"></span><div class="mascot-frame welcome-mascot"><img src="/ui/assets/forensic-claw-cutout.png" alt="" width="1254" height="1254"></div><span class="scene-caption">FOLLOW THE EVIDENCE</span></div>
     <p class="eyebrow">YOUR FORENSIC COMPANION</p><h2>작은 단서도, 근거를 따라.</h2>
-    <p>사건에 파일을 추가하고, 확인하고 싶은 내용을 질문하세요.<br>결과의 근거와 검증 상태를 함께 확인할 수 있습니다.</p>
+    <p>파일을 추가하거나, 조사할 내용을 바로 질문하세요.<br>질문에 관련된 PC의 증거를 찾아 수집하고 근거를 확인합니다.</p>
     <div class="workflow-steps"><span><b>01</b> 사건 선택</span><span><b>02</b> 자료 추가</span><span><b>03</b> 근거 확인</span><span><b>04</b> 보고서</span></div>
     <button type="button" class="send-button material-picker">＋ 첫 자료 추가</button>
-    <p class="welcome-hint">로그 · 브라우저 기록 · Windows 아티팩트 · 문서</p></section>`;
+    <p class="welcome-hint">첨부는 선택 사항 · 조사 대상·기간·경로를 알려주면 더 정확합니다.</p></section>`;
   chatLog.querySelector("button").addEventListener("click", () => fileInput.click());
 }
 
@@ -2143,6 +2143,7 @@ function handleSocketEvent(event) {
     }
     setStatus(wasStopRequested ? "응답 생성이 중지되었습니다." : "응답이 완료되었습니다.");
     refreshSessions();
+    refreshCases().catch((error) => setStatus(`수집 자료 갱신 실패: ${error.message}`));
     if (state.pendingReportCaseId) {
       const caseId = state.pendingReportCaseId;
       state.pendingReportCaseId = "";

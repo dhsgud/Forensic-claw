@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,87 @@ class _KnowledgeTool(Tool):
         return resolved
 
 
+class KnowledgeDiscoverTool(_KnowledgeTool):
+    """Locate candidate local artifacts without collecting unrelated file contents."""
+
+    @property
+    def name(self) -> str:
+        return "knowledge_discover"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Find existing local evidence locations when the user has not uploaded files. "
+            "Use chrome_history for Chrome databases, windows_events for EVTX files, or "
+            "locations for workspace/home/app-data directories. Inspect relevant candidates "
+            "with list_dir, then knowledge_ingest and knowledge_search before answering."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["chrome_history", "windows_events", "locations"],
+                }
+            },
+            "required": ["source"],
+        }
+
+    async def execute(self, source: str, **_: Any) -> str:
+        if source not in {"chrome_history", "windows_events", "locations"}:
+            return "Error: unsupported evidence source"
+
+        def discover() -> dict[str, Any]:
+            locations = {"workspace": self.workspace.resolve(), "home": Path.home().resolve()}
+            for name in ("LOCALAPPDATA", "APPDATA", "SystemRoot"):
+                if value := os.environ.get(name):
+                    locations[name] = Path(value).resolve()
+            permitted = {
+                name: path
+                for name, path in locations.items()
+                if path.is_dir() and (not self.allowed_dir or _is_under(path, self.allowed_dir))
+            }
+            candidates = []
+            if source == "chrome_history":
+                candidates = self.service.discover_chrome_history(
+                    max_files=20, allowed_dir=self.allowed_dir
+                )
+            elif source == "windows_events" and "SystemRoot" in permitted:
+                logs = (permitted["SystemRoot"] / "System32/winevt/Logs").resolve()
+                if not self.allowed_dir or _is_under(logs, self.allowed_dir):
+                    permitted["event_logs"] = logs
+                candidates = [
+                    logs / name
+                    for name in (
+                        "System.evtx",
+                        "Application.evtx",
+                        "Security.evtx",
+                        "Windows PowerShell.evtx",
+                        "Microsoft-Windows-PowerShell%4Operational.evtx",
+                        "Microsoft-Windows-Sysmon%4Operational.evtx",
+                    )
+                ]
+            return {
+                "source": source,
+                "locations": {name: str(path) for name, path in permitted.items()},
+                "candidates": [
+                    str(path.resolve())
+                    for path in candidates
+                    if path.is_file()
+                    and (not self.allowed_dir or _is_under(path.resolve(), self.allowed_dir))
+                ],
+                "next_step": "Ingest only relevant candidates, then search the current case.",
+            }
+
+        try:
+            return json.dumps(await asyncio.to_thread(discover), ensure_ascii=False)
+        except OSError as exc:
+            return f"Error: evidence discovery failed: {exc}"
+
+
 class KnowledgeIngestTool(_KnowledgeTool):
     """Prepare large local evidence into the RAG and graph stores."""
 
@@ -63,7 +145,8 @@ class KnowledgeIngestTool(_KnowledgeTool):
         return (
             "Ingest a local evidence file or directory into the local RAG index and graph store. "
             "Use this for large logs, Chrome History SQLite databases, and evidence folders before "
-            "answering questions about their contents. When it reports ready, tell the user they can ask questions."
+            "answering questions about their contents. After it reports ready, search the newly "
+            "collected evidence and answer the current question in the same turn."
         )
 
     @property

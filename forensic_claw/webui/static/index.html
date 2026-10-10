@@ -6,7 +6,7 @@
     <title>Forensic-Claw · 포렌식 워크벤치</title>
     <meta name="theme-color" content="#142d43">
     <link rel="icon" type="image/png" href="/ui/assets/forensic-claw-cutout.png">
-    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708-workbench-20261010-cutout">
+    <link rel="stylesheet" href="/ui/assets/styles.css?v=settings-20260708-workbench-20261010-investigation">
   </head>
   <body>
     <section id="setup-screen" class="setup-screen">
@@ -217,7 +217,7 @@
           <div id="slash-menu" class="slash-menu" hidden></div>
           <form id="composer" class="composer">
             <label for="message-input" class="sr-only">분석할 내용</label>
-            <textarea id="message-input" rows="3" placeholder="증거에서 확인하고 싶은 내용을 입력하세요"></textarea>
+            <textarea id="message-input" rows="3" placeholder="파일을 추가하거나, PC에서 조사할 내용을 질문하세요"></textarea>
             <button id="send-button" class="send-button" type="button">분석 요청</button>
           </form>
           <div class="composer-toolbar"><button class="ghost-button file-picker" id="pick-file" type="button">＋ 파일 추가</button><input id="evidence-file" class="sr-only" type="file" multiple aria-label="추가할 증거 파일 선택"><span>파일을 끌어놓아도 됩니다 · Shift + Enter 줄바꿈</span></div>
@@ -325,6 +325,6 @@
       </article>
     </template>
 
-    <script src="/ui/assets/app.js?v=settings-20260708-workbench-20261010-cutout" defer></script>
+    <script src="/ui/assets/app.js?v=settings-20260708-workbench-20261010-investigation" defer></script>
   </body>
 </html>

@@ -28,6 +28,7 @@ from forensic_claw.agent.tools.filesystem import (
 )
 from forensic_claw.agent.tools.hashing import HashVerifyTool
 from forensic_claw.agent.tools.knowledge import (
+    KnowledgeDiscoverTool,
     KnowledgeIngestTool,
     KnowledgeSearchTool,
     KnowledgeStatusTool,
@@ -303,6 +304,11 @@ class AgentLoop:
             self.tools.register(AcquireRegistryHivesTool(workspace=self.workspace))
         if self.knowledge_service and self.knowledge_service.enabled:
             self.tools.register(
+                KnowledgeDiscoverTool(
+                    self.knowledge_service, workspace=self.workspace, allowed_dir=allowed_dir
+                )
+            )
+            self.tools.register(
                 KnowledgeIngestTool(
                     self.knowledge_service,
                     workspace=self.workspace,
@@ -370,7 +376,12 @@ class AgentLoop:
         if tool := self.tools.get("message"):
             if hasattr(tool, "set_context"):
                 tool.set_context(channel, chat_id, message_id)
-        for name in ("knowledge_ingest", "knowledge_search", "knowledge_status"):
+        for name in (
+            "knowledge_discover",
+            "knowledge_ingest",
+            "knowledge_search",
+            "knowledge_status",
+        ):
             if tool := self.tools.get(name):
                 tool.set_context(metadata or {})
         if tool := self.tools.get("spawn"):
@@ -558,7 +569,9 @@ class AgentLoop:
         messages = initial_messages
         from forensic_claw.forensics.trust import (
             CLAIM_INSTRUCTION,
+            COLLECTION_RETRY_INSTRUCTION,
             EVIDENCE_TOOLS,
+            INVESTIGATION_INSTRUCTION,
             HallucinationDetector,
         )
         from forensic_claw.security.model_proxy import BLOCKED_MESSAGE, evidence_allowed
@@ -573,6 +586,7 @@ class AgentLoop:
             text = BLOCKED_MESSAGE
             return text, [], [*messages, {"role": "assistant", "content": text}]
         grounded_hits = []
+        collection_retry = False
         if evidence_mode:
             query = next(
                 (
@@ -591,7 +605,7 @@ class AgentLoop:
             grounded_hits.extend(data.get("hits", []))
             messages = [
                 *messages,
-                {"role": "system", "content": CLAIM_INSTRUCTION},
+                {"role": "system", "content": INVESTIGATION_INSTRUCTION + CLAIM_INSTRUCTION},
                 {
                     "role": "user",
                     "content": "[검증된 사건 근거 JSON]\n"
@@ -779,6 +793,22 @@ class AgentLoop:
                         if not evidence_mode:
                             evidence_mode = True
                             messages.append({"role": "system", "content": CLAIM_INSTRUCTION})
+                if (
+                    evidence_mode
+                    and scope
+                    and any(tc.name == "knowledge_ingest" for tc in response.tool_calls)
+                ):
+                    data = await asyncio.to_thread(
+                        self.knowledge_service.search, query, case_id=scope
+                    )
+                    grounded_hits.extend(data.get("hits", []))
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "[검증된 사건 근거 JSON]\n"
+                            + json.dumps(grounded_hits, ensure_ascii=False),
+                        }
+                    )
             else:
                 if use_stream and on_stream_end:
                     await on_stream_end(resuming=False)
@@ -799,13 +829,25 @@ class AgentLoop:
                     )
                     break
                 if evidence_mode:
+                    if not grounded_hits and not collection_retry:
+                        collection_retry = True
+                        messages.append({"role": "system", "content": COLLECTION_RETRY_INSTRUCTION})
+                        if on_progress:
+                            await on_progress(
+                                "첨부 자료 없이 질문에 관련된 로컬 증거를 조사합니다."
+                            )
+                        continue
                     if grounded_hits:
                         await asyncio.to_thread(self.knowledge_service.verify_hits, grounded_hits)
                         clean, checks = HallucinationDetector().check_response(
                             clean or "", grounded_hits
                         )
                     else:
-                        clean = "검증된 사건 근거가 없어 분석 결과를 생성하지 않았습니다. 자료를 수집·인덱싱한 뒤 다시 질의하세요."
+                        clean = (
+                            "자동 조사에서 답변할 수 있는 사건 근거를 확보하지 못했습니다. "
+                            "조사할 대상·경로를 알려주거나 파일을 추가해 주세요. "
+                            "접근 권한과 수집 도구 결과도 확인해 주세요."
+                        )
                 reasoning_text = response.reasoning_content or extract_think(response.content)
                 messages = self.context.add_assistant_message(
                     messages,
@@ -1071,6 +1113,7 @@ class AgentLoop:
             or metadata.get("caseId")
             or parse_scoped_session_key(msg.session_key).case_id,
             investigator_name=metadata.get("investigator_name") or metadata.get("investigatorName"),
+            allowed_dir=self.workspace if self.restrict_to_workspace else None,
         )
         return "Auto Chrome History preparation:\n" + self.knowledge_service.result_to_text(result)
 

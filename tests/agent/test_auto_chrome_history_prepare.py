@@ -36,10 +36,7 @@ def _write_chrome_history(path):
             """
         )
         chrome_time = int(
-            (
-                datetime(2026, 5, 7, tzinfo=UTC)
-                - datetime(1601, 1, 1, tzinfo=UTC)
-            ).total_seconds()
+            (datetime(2026, 5, 7, tzinfo=UTC) - datetime(1601, 1, 1, tzinfo=UTC)).total_seconds()
             * 1_000_000
         )
         conn.execute(
@@ -91,3 +88,37 @@ async def test_chrome_history_request_prepares_knowledge_before_llm_answer(tmp_p
     ]
     assert any("Auto Knowledge Preparation" in payload for payload in prompt_payloads)
     assert any("Knowledge ingest ready" in payload for payload in prompt_payloads)
+
+
+@pytest.mark.asyncio
+async def test_automatic_history_collection_excludes_external_files_when_workspace_is_restricted(
+    tmp_path, monkeypatch
+):
+    history = tmp_path / "Google/Chrome/User Data/Default/History"
+    _write_chrome_history(history)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    provider.generation = GenerationSettings(max_tokens=0)
+    provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content='{"claims":[]}'))
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path / "workspace",
+        restrict_to_workspace=True,
+        enforce_response_language=False,
+    )
+    try:
+        response = await loop._process_message(
+            InboundMessage(
+                channel="webui",
+                sender_id="user",
+                chat_id="one",
+                content="크롬 DB 조사해줘",
+                metadata={"case_id": "restricted-case"},
+            )
+        )
+        assert loop.knowledge_service.status()["store"]["documents"] == 0
+        assert "PARTIAL" not in response.content
+    finally:
+        await loop.close_mcp()

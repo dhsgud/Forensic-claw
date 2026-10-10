@@ -376,15 +376,21 @@ class KnowledgeService:
                 )
         return valid, rejected
 
-    def discover_chrome_history(self, *, max_files: int = 20) -> list[Path]:
+    def discover_chrome_history(
+        self, *, max_files: int = 20, allowed_dir: Path | None = None
+    ) -> list[Path]:
         """Find Chrome History SQLite databases in likely local locations."""
         candidates: list[Path] = []
         seen: set[Path] = set()
         for root in self._chrome_history_roots():
+            if allowed_dir and not root.resolve().is_relative_to(allowed_dir.resolve()):
+                continue
             if not root.exists():
                 continue
             for path in self._walk_history_files(root):
                 resolved = path.resolve()
+                if allowed_dir and not resolved.is_relative_to(allowed_dir.resolve()):
+                    continue
                 if resolved in seen:
                     continue
                 seen.add(resolved)
@@ -401,9 +407,10 @@ class KnowledgeService:
         case_id: str | None = None,
         investigator_name: str | None = None,
         max_files: int = 20,
+        allowed_dir: Path | None = None,
     ) -> KnowledgeIngestResult:
         """Discover Chrome History databases and ingest them."""
-        paths = self.discover_chrome_history(max_files=max_files)
+        paths = self.discover_chrome_history(max_files=max_files, allowed_dir=allowed_dir)
         if not paths:
             logger.warning("Chrome History preparation found no databases")
             return KnowledgeIngestResult(
