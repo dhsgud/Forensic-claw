@@ -140,7 +140,7 @@ function setWorkbenchView(view) {
 function showChatWelcome() {
   if (chatLog.children.length) return;
   chatLog.innerHTML = `<section id="chat-welcome" class="chat-welcome">
-    <div class="welcome-illustration" aria-hidden="true"><span class="scene-line"></span><div class="mascot-frame welcome-mascot"><img src="/ui/assets/forensic-claw.png" alt="" width="1536" height="1024"></div><span class="scene-caption">FOLLOW THE EVIDENCE</span></div>
+    <div class="welcome-illustration" aria-hidden="true"><span class="scene-line"></span><div class="mascot-frame welcome-mascot"><img src="/ui/assets/forensic-claw-cutout.png" alt="" width="1254" height="1254"></div><span class="scene-caption">FOLLOW THE EVIDENCE</span></div>
     <p class="eyebrow">YOUR FORENSIC COMPANION</p><h2>작은 단서도, 근거를 따라.</h2>
     <p>사건에 파일을 추가하고, 확인하고 싶은 내용을 질문하세요.<br>결과의 근거와 검증 상태를 함께 확인할 수 있습니다.</p>
     <div class="workflow-steps"><span><b>01</b> 사건 선택</span><span><b>02</b> 자료 추가</span><span><b>03</b> 근거 확인</span><span><b>04</b> 보고서</span></div>

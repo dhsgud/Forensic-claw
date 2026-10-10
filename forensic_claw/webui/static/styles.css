@@ -1385,23 +1385,22 @@ dialog::backdrop { background: rgba(12, 31, 29, .42); }
 }
 #model-summary { white-space: pre-line; overflow-wrap: anywhere; }
 
-/* Frame the original mascot artwork without changing the source illustration. */
-.mascot-frame { position: relative; overflow: hidden; background: #fff; aspect-ratio: 560 / 510; flex-shrink: 0; }
-.mascot-frame > img { position: absolute; width: 274.286%; height: auto; max-width: none; left: -95.536%; top: -26.471%; pointer-events: none; }
-.brand-avatar { width: 58px; border-radius: 16px; border: 1px solid #587086; }
+.mascot-frame { aspect-ratio: 1; flex-shrink: 0; }
+.mascot-frame > img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.brand-avatar { width: 58px; }
 .brand { gap: 10px; }
 .brand h1 { font-size: 18px; }
 .brand-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #ee8c68; }
-.message.assistant .message-meta::before { content: ""; display: inline-block; width: 30px; aspect-ratio: 560 / 510; background: #fff url("/ui/assets/forensic-claw.png") 54.82% 26.26% / 274.286% auto no-repeat; border: 1px solid var(--line); border-radius: 9px; vertical-align: middle; margin-right: 8px; }
+.message.assistant .message-meta::before { content: ""; display: inline-block; width: 30px; aspect-ratio: 1; background: url("/ui/assets/forensic-claw-cutout.png") center / contain no-repeat; vertical-align: middle; margin-right: 8px; }
 .setup-screen { background: radial-gradient(ellipse at 10% 10%, #e5ecf1 0, transparent 50%), var(--bg); padding: 36px; }
 .setup-layout { display: grid; grid-template-columns: minmax(300px, .82fr) minmax(440px, 1.18fr); width: min(1160px, 100%); border: 1px solid #dce3e9; border-radius: 28px; overflow: hidden; box-shadow: 0 30px 80px #142d4314; }
 .brand-intro { display: flex; flex-direction: column; justify-content: space-between; gap: 28px; padding: 38px; color: #fff; background: #142d43; }
 .intro-wordmark { font-size: 27px; letter-spacing: -1px; font-weight: 800; }
 .intro-wordmark > span { color: #f49a79; }
 .intro-wordmark > small { display: block; color: #b5c7d6; font-size: 9px; letter-spacing: 2px; margin-top: 9px; font-weight: 500; }
-.intro-illustration { position: relative; display: grid; place-items: center; padding: 20px 15px 36px; border-radius: 24px; background: #fff; box-shadow: 0 16px 30px #06162624; }
+.intro-illustration { position: relative; display: grid; place-items: center; padding: 20px 15px 36px; }
 .intro-mascot { width: min(265px, 100%); }
-.illustration-label { position: absolute; bottom: 15px; color: #486378; font-size: 9px; letter-spacing: 2.4px; font-weight: 700; }
+.illustration-label { position: absolute; bottom: 15px; color: #b5c7d6; font-size: 9px; letter-spacing: 2.4px; font-weight: 700; }
 .intro-copy .eyebrow { color: #f4a182; font-size: 11px; letter-spacing: .5px; margin: 0 0 13px; }
 .intro-copy h2 { font-size: clamp(30px, 3vw, 42px); font-weight: 750; line-height: 1.35; letter-spacing: -1.6px; margin: 0 0 18px; }
 .intro-copy > p:last-child { color: #c6d3de; font-size: 12px; line-height: 1.9; margin: 0; }
