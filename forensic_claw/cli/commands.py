@@ -1197,6 +1197,33 @@ def plugins_list():
 # ============================================================================
 
 
+@app.command("next-evidence")
+def next_evidence(
+    case_model: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    budget: int = typer.Option(..., "--budget", min=0, help="Remaining integer cost units"),
+    observed: list[str] | None = typer.Option(
+        None, "--observed", help="Known CHECK=OUTCOME. Repeat for additional checks."
+    ),
+) -> None:
+    """Recommend the next check from an analyst-specified case model."""
+    import json
+
+    from forensic_claw.forensics.evidence_policy import EvidenceProblem, recommend_evidence
+
+    observations = {}
+    for item in observed or ():
+        check, separator, outcome = item.partition("=")
+        if not separator or not check or not outcome.strip() or check in observations:
+            raise typer.BadParameter("each observation must be a unique CHECK=OUTCOME")
+        observations[check] = outcome
+    try:
+        problem = EvidenceProblem.model_validate_json(case_model.read_text(encoding="utf-8-sig"))
+        result = recommend_evidence(problem, observations, budget)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 @app.command("evaluate-model")
 def evaluate_model(
     pi_config: Path = typer.Option(

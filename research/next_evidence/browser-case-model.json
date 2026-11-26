@@ -1,0 +1,126 @@
+{
+  "checks": [
+    {
+      "id": "payload",
+      "cost": 1
+    },
+    {
+      "id": "full_history",
+      "cost": 4
+    },
+    {
+      "id": "entry_hint",
+      "cost": 1
+    },
+    {
+      "id": "profile",
+      "cost": 1
+    },
+    {
+      "id": "final_origin",
+      "cost": 2
+    },
+    {
+      "id": "server_log",
+      "cost": 3
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "target-a-common",
+      "verdict": "supported",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "target:a",
+        "entry_hint": "common",
+        "profile": "target",
+        "final_origin": "a",
+        "server_log": "a"
+      }
+    },
+    {
+      "id": "target-a-mirror",
+      "verdict": "supported",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "target:a",
+        "entry_hint": "mirror",
+        "profile": "target",
+        "final_origin": "a",
+        "server_log": "unavailable"
+      }
+    },
+    {
+      "id": "target-b-common",
+      "verdict": "refuted",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "target:b",
+        "entry_hint": "common",
+        "profile": "target",
+        "final_origin": "b",
+        "server_log": "b"
+      }
+    },
+    {
+      "id": "target-b-direct",
+      "verdict": "refuted",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "target:b",
+        "entry_hint": "direct",
+        "profile": "target",
+        "final_origin": "b",
+        "server_log": "b"
+      }
+    },
+    {
+      "id": "other-a-common",
+      "verdict": "refuted",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "other:a",
+        "entry_hint": "common",
+        "profile": "other",
+        "final_origin": "a",
+        "server_log": "a"
+      }
+    },
+    {
+      "id": "other-a-direct",
+      "verdict": "refuted",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "other:a",
+        "entry_hint": "direct",
+        "profile": "other",
+        "final_origin": "a",
+        "server_log": "a"
+      }
+    },
+    {
+      "id": "other-b-mirror",
+      "verdict": "refuted",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "other:b",
+        "entry_hint": "mirror",
+        "profile": "other",
+        "final_origin": "b",
+        "server_log": "unavailable"
+      }
+    },
+    {
+      "id": "other-b-direct",
+      "verdict": "refuted",
+      "outcomes": {
+        "payload": "match",
+        "full_history": "other:b",
+        "entry_hint": "direct",
+        "profile": "other",
+        "final_origin": "b",
+        "server_log": "b"
+      }
+    }
+  ]
+}

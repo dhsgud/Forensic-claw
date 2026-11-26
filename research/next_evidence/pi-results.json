@@ -1,0 +1,471 @@
+{
+  "standard": {
+    "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
+    "pi_model_alias": "llamacpp/coder390",
+    "budget": 3,
+    "input": {
+      "checks": [
+        {
+          "id": "payload",
+          "cost": 1
+        },
+        {
+          "id": "full_history",
+          "cost": 4
+        },
+        {
+          "id": "entry_hint",
+          "cost": 1
+        },
+        {
+          "id": "profile",
+          "cost": 1
+        },
+        {
+          "id": "final_origin",
+          "cost": 2
+        },
+        {
+          "id": "server_log",
+          "cost": 3
+        }
+      ],
+      "hypotheses": [
+        {
+          "id": "target-a-common",
+          "verdict": "supported",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "target:a",
+            "entry_hint": "common",
+            "profile": "target",
+            "final_origin": "a",
+            "server_log": "a"
+          }
+        },
+        {
+          "id": "target-a-mirror",
+          "verdict": "supported",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "target:a",
+            "entry_hint": "mirror",
+            "profile": "target",
+            "final_origin": "a",
+            "server_log": "unavailable"
+          }
+        },
+        {
+          "id": "target-b-common",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "target:b",
+            "entry_hint": "common",
+            "profile": "target",
+            "final_origin": "b",
+            "server_log": "b"
+          }
+        },
+        {
+          "id": "target-b-direct",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "target:b",
+            "entry_hint": "direct",
+            "profile": "target",
+            "final_origin": "b",
+            "server_log": "b"
+          }
+        },
+        {
+          "id": "other-a-common",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "other:a",
+            "entry_hint": "common",
+            "profile": "other",
+            "final_origin": "a",
+            "server_log": "a"
+          }
+        },
+        {
+          "id": "other-a-direct",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "other:a",
+            "entry_hint": "direct",
+            "profile": "other",
+            "final_origin": "a",
+            "server_log": "a"
+          }
+        },
+        {
+          "id": "other-b-mirror",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "other:b",
+            "entry_hint": "mirror",
+            "profile": "other",
+            "final_origin": "b",
+            "server_log": "unavailable"
+          }
+        },
+        {
+          "id": "other-b-direct",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "full_history": "other:b",
+            "entry_hint": "direct",
+            "profile": "other",
+            "final_origin": "b",
+            "server_log": "b"
+          }
+        }
+      ]
+    },
+    "response": "Looking at the case model, I need to find a policy that resolves all 8 hypotheses within budget 3.\n\n**Analysis:**\n\n- `payload` is useless (all hypotheses have `match`)\n- `profile` (cost 1) splits into:\n  - `target`: {target-a-common, target-a-mirror, target-b-common, target-b-direct} — mixed verdicts\n  - `other`: {other-a-common, other-a-direct, other-b-mirror, other-b-direct} — **all refetermined!** (stop)\n- `final_origin` (cost 2) in the `target` branch splits into:\n  - `a`: {target-a-common, target-a-mirror} — **both supported** ✓\n  - `b`: {target-b-common, target-b-direct} — **both refuted** ✓\n\n**Expected cost:** (4/8)×1 + (2/8)×3 + (2/8)×3 = 0.5 + 0.75 + 0.75 = **2.0**\n\nThis beats `final_origin → profile` (expected cost 2.5) and any other policy.\n\n```json\n{\"check\":\"profile\",\"branches\":{\"target\":{\"check\":\"final_origin\",\"branches\":{\"a\":null,\"b\":null}},\"other\":null}}\n```",
+    "error": "invalid JSON",
+    "recovered_rows": [
+      {
+        "trial": "b1-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-6",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-7",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-6",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-7",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      }
+    ]
+  },
+  "split_archives": {
+    "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
+    "pi_model_alias": "llamacpp/coder390",
+    "budget": 3,
+    "input": {
+      "checks": [
+        {
+          "id": "payload",
+          "cost": 1
+        },
+        {
+          "id": "profile",
+          "cost": 1
+        },
+        {
+          "id": "target_archive",
+          "cost": 2
+        },
+        {
+          "id": "other_archive",
+          "cost": 2
+        }
+      ],
+      "hypotheses": [
+        {
+          "id": "target-a-common",
+          "verdict": "supported",
+          "outcomes": {
+            "payload": "match",
+            "profile": "target",
+            "target_archive": "a",
+            "other_archive": "unavailable"
+          }
+        },
+        {
+          "id": "target-a-mirror",
+          "verdict": "supported",
+          "outcomes": {
+            "payload": "match",
+            "profile": "target",
+            "target_archive": "a",
+            "other_archive": "unavailable"
+          }
+        },
+        {
+          "id": "target-b-common",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "profile": "target",
+            "target_archive": "b",
+            "other_archive": "unavailable"
+          }
+        },
+        {
+          "id": "target-b-direct",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "profile": "target",
+            "target_archive": "b",
+            "other_archive": "unavailable"
+          }
+        },
+        {
+          "id": "other-a-common",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "profile": "other",
+            "target_archive": "unavailable",
+            "other_archive": "a"
+          }
+        },
+        {
+          "id": "other-a-direct",
+          "verdict": "refuted",
+          "outcomes": {
+            "payload": "match",
+            "profile": "other",
+            "target_archive": "unavailable",
+            "other_archive": "a"
+          }
+        },
+        {
+          "id": "other-b-mirror",
+          "verdict": "supported",
+          "outcomes": {
+            "payload": "match",
+            "profile": "other",
+            "target_archive": "unavailable",
+            "other_archive": "b"
+          }
+        },
+        {
+          "id": "other-b-direct",
+          "verdict": "supported",
+          "outcomes": {
+            "payload": "match",
+            "profile": "other",
+            "target_archive": "unavailable",
+            "other_archive": "b"
+          }
+        }
+      ]
+    },
+    "response": "```json\n{\"check\":\"profile\",\"branches\":{\"target\":{\"check\":\"target_archive\",\"branches\":{\"a\":null,\"b\":null}},\"other\":{\"check\":\"other_archive\",\"branches\":{\"a\":null,\"b\":null}}}}\n```",
+    "rows": [
+      {
+        "trial": "b1-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-6",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-7",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-6",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-7",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      }
+    ]
+  }
+}
