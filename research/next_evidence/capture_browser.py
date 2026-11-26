@@ -11,7 +11,10 @@ from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter_ns
 from urllib.parse import urlsplit
+
+from forensic_claw.forensics.browser_history import final_download_url
 
 CHECKS = [
     {"id": "payload", "cost": 1},
@@ -59,7 +62,7 @@ def model():
     }
 
 
-def capture(rounds, browser):
+def capture(rounds, browser, verify_direct=False):
     node_shim = shutil.which("npx.cmd")
     if node_shim is None:
         raise RuntimeError("npx.cmd is required")
@@ -156,7 +159,16 @@ def capture(rounds, browser):
                 digest = hashlib.sha256((directory / f"{trial}.txt").read_bytes()).hexdigest()
                 if sent.get(trial) != origin or received != len(PAYLOAD):
                     raise ValueError(f"origin response and browser record disagree: {trial}")
+                direct = {}
+                if verify_direct:
+                    start = perf_counter_ns()
+                    final = final_download_url(path, download)
+                    duration = (perf_counter_ns() - start) / 1000
+                    if final != chain[-1]:
+                        raise ValueError(f"direct SQL and parsed URL disagree: {trial}")
+                    direct = {"direct_origin": origin, "direct_lookup_us": round(duration)}
                 yield {
+                    **direct,
                     "trial": trial,
                     "profile": profile,
                     "origin": origin,
@@ -185,6 +197,8 @@ def capture(rounds, browser):
                                 trial = f"b{batch}-{index}"
                                 records[trial] = row
                                 trials.append(trial)
+                        if verify_direct and profile == "other":
+                            trials.reverse()
                         code = directory / "download.js"
                         commands = []
                         for trial in trials:
@@ -229,9 +243,10 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--browser", choices=("msedge", "chrome"), default="msedge")
     parser.add_argument("--rounds", type=int, choices=range(1, 5), default=3)
+    parser.add_argument("--verify-direct", action="store_true")
     args = parser.parse_args()
     if args.output.exists():
         parser.error("output already exists")
-    capture_result = capture(args.rounds, args.browser)
+    capture_result = capture(args.rounds, args.browser, args.verify_direct)
     with args.output.open("x", encoding="utf-8") as output:
         json.dump(capture_result, output, indent=2)

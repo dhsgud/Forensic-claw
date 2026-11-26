@@ -1197,6 +1197,26 @@ def plugins_list():
 # ============================================================================
 
 
+@app.command("download-source")
+def download_source(
+    history: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    download_id: int = typer.Argument(..., min=1),
+) -> None:
+    """Read a completed download's final URL from an Edge or Chrome History database."""
+    from sqlite3 import Error
+
+    from forensic_claw.forensics.browser_history import final_download_url
+
+    try:
+        url = final_download_url(history, download_id)
+    except (OSError, Error) as exc:
+        raise typer.BadParameter("unable to query the History database") from exc
+    if url is None:
+        typer.echo("No completed download URL for this ID.", err=True)
+        raise typer.Exit(1)
+    typer.echo(url)
+
+
 @app.command("next-evidence")
 def next_evidence(
     case_model: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),

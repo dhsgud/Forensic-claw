@@ -16,8 +16,8 @@ On 2026-11-26 UTC, Playwright CLI 0.1.25 captured 24 downloads per browser on Wi
 From the repository root with project dependencies installed:
 
 ```powershell
-py -3.12 research/next_evidence/capture_browser.py edge-replication.json --browser msedge --rounds 3
-py -3.12 research/next_evidence/capture_browser.py chrome-replication.json --browser chrome --rounds 3
+py -3.12 -m research.next_evidence.capture_browser edge-replication.json --browser msedge --rounds 3
+py -3.12 -m research.next_evidence.capture_browser chrome-replication.json --browser chrome --rounds 3
 py -3.12 -m research.next_evidence.benchmark research/next_evidence/browser-records.json edge-comparison-replication.json
 py -3.12 -m research.next_evidence.benchmark research/next_evidence/chrome-records.json chrome-comparison-replication.json
 py -3.12 -m research.next_evidence.pi_baseline research/next_evidence/chrome-records.json chrome-pi-replication.json --recorded research/next_evidence/pi-results.json
@@ -29,3 +29,21 @@ Browser capture requires the selected browser, Node.js and npm. The Pi experimen
 `results.json` contains counts, per-trial outcomes and the query sequence. Run `py -3.12 -m research.next_evidence.plot_results` with Matplotlib installed to regenerate the manuscript figure from those results.
 
 Each browser has 1,280 policy replay rows. `chrome-results.json` reproduces the Edge results in `results.json`; the normalized observation rows match across browsers. `chrome-pi-replay.json` applies the previously recorded responses to the Chrome holdout without calling the model again.
+
+
+## Direct SQL baseline
+
+A specific completed download can be looked up in an acquired Edge or Chrome History database with:
+
+```powershell
+py -3.12 -m forensic_claw download-source 'C:/Evidence/History' 7
+```
+
+The row identifier is local to the database. The verification capture uses two fresh batches per browser, reverses the order of downloads in the comparison profile, and compares the direct SQL result with the separately extracted final URL and the responding server. It records only normalized outcomes and query durations. For the comparison, the same captured outcomes are exposed under four evidence-availability conditions. The acquisition manifest is controlled ground-truth profile linkage supplied as an extra observation; the recorded query time measures the local connection and SQL call, without acquisition or analyst time.
+
+```powershell
+py -3.12 -m research.next_evidence.capture_browser edge-direct-replication.json --browser msedge --rounds 2 --verify-direct
+py -3.12 -m research.next_evidence.capture_browser chrome-direct-replication.json --browser chrome --rounds 2 --verify-direct
+py -3.12 -m research.next_evidence.direct_baseline research/next_evidence/msedge-direct-records.json edge-direct-result-replication.json
+py -3.12 -m research.next_evidence.direct_baseline research/next_evidence/chrome-direct-records.json chrome-direct-result-replication.json
+```

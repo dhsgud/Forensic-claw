@@ -1,0 +1,608 @@
+{
+  "browser": "chrome",
+  "lookup_median_us": 1754.0,
+  "summary": {
+    "identified": {
+      "trials": 16,
+      "direct_sql_correct": 16,
+      "sql_with_manifest_correct": 16,
+      "forensic_claw_correct": 16
+    },
+    "ambiguous": {
+      "trials": 16,
+      "direct_sql_abstain": 16,
+      "sql_with_manifest_abstain": 16,
+      "forensic_claw_abstain": 16
+    },
+    "manifest_available": {
+      "trials": 16,
+      "direct_sql_abstain": 16,
+      "sql_with_manifest_correct": 16,
+      "forensic_claw_correct": 16
+    },
+    "history_missing": {
+      "trials": 16,
+      "direct_sql_abstain": 16,
+      "sql_with_manifest_abstain": 16,
+      "forensic_claw_abstain": 16
+    }
+  },
+  "details": [
+    {
+      "trial": "b0-0",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b0-0",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-0",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-0",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-1",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b0-1",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-1",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-1",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-2",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b0-2",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-2",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-2",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-3",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b0-3",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-3",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-3",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-7",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b0-7",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-7",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-7",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-6",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b0-6",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-6",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-6",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-5",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b0-5",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-5",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-5",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b0-4",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b0-4",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-4",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b0-4",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-0",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b1-0",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-0",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-0",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-1",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b1-1",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-1",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-1",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-2",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b1-2",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-2",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-2",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-3",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b1-3",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-3",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-3",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-7",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b1-7",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-7",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-7",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-6",
+      "condition": "identified",
+      "truth": "b",
+      "direct_sql": "b",
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": null
+    },
+    {
+      "trial": "b1-6",
+      "condition": "ambiguous",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-6",
+      "condition": "manifest_available",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": "b",
+      "forensic_claw": "b",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-6",
+      "condition": "history_missing",
+      "truth": "b",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-5",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b1-5",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-5",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-5",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    },
+    {
+      "trial": "b1-4",
+      "condition": "identified",
+      "truth": "a",
+      "direct_sql": "a",
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": null
+    },
+    {
+      "trial": "b1-4",
+      "condition": "ambiguous",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-4",
+      "condition": "manifest_available",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": "a",
+      "forensic_claw": "a",
+      "recommended": "profile_manifest"
+    },
+    {
+      "trial": "b1-4",
+      "condition": "history_missing",
+      "truth": "a",
+      "direct_sql": null,
+      "sql_with_manifest": null,
+      "forensic_claw": null,
+      "recommended": null
+    }
+  ]
+}
