@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -73,17 +74,43 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("records", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--recorded", type=Path, help="Replay saved model responses without calls")
     args = parser.parse_args()
     records = json.loads(args.records.read_text(encoding="utf-8"))
+    cases = {
+        "standard": (model(), prepare(records)),
+        "split_archives": split_archives(records),
+    }
+    if args.recorded:
+        previous = json.loads(args.recorded.read_text(encoding="utf-8"))
+        output = {}
+        for name, (definition, samples) in cases.items():
+            old = previous[name]
+            if definition != old["input"] or old["budget"] != BUDGET:
+                parser.error(f"case model or budget differs for {name}")
+            holdout = [sample for sample in samples if not sample[0].startswith("b0-")]
+            report = {"model": old["model"], "budget": BUDGET}
+            if "rows" in old:
+                report["rows"] = evaluate(old["response"], definition, holdout)
+            elif "recovered_rows" in old:
+                blocks = re.findall(r"```json\s*([\s\S]*?)```", old["response"])
+                if len(blocks) != 1:
+                    parser.error(f"expected one JSON block for {name}")
+                report["error"] = old["error"]
+                report["recovered_rows"] = evaluate(blocks[0], definition, holdout)
+            else:
+                report["error"] = old["error"]
+            output[name] = report
+        with args.output.open("x", encoding="utf-8") as file:
+            json.dump(output, file, ensure_ascii=False, indent=2)
+        parser.exit()
+
     shim, node = shutil.which("pi.cmd"), shutil.which("node")
     if not shim or not node:
         parser.error("Pi and Node.js must be available")
     entry = Path(shim).parent / "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
     output = {}
-    for name, (definition, samples) in (
-        ("standard", (model(), prepare(records))),
-        ("split_archives", split_archives(records)),
-    ):
+    for name, (definition, samples) in cases.items():
         prompt = PROMPT + json.dumps(definition)
         result = subprocess.run(
             [

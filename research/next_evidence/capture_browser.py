@@ -1,4 +1,4 @@
-"""Capture controlled Windows Chromium evidence from fresh Edge profiles via Playwright CLI."""
+"""Capture controlled Windows Chromium evidence from fresh Chromium browser profiles via Playwright CLI."""
 
 import argparse
 import hashlib
@@ -59,7 +59,7 @@ def model():
     }
 
 
-def capture(rounds):
+def capture(rounds, browser):
     node_shim = shutil.which("npx.cmd")
     if node_shim is None:
         raise RuntimeError("npx.cmd is required")
@@ -204,7 +204,7 @@ def capture(rounds):
                             session,
                             "open",
                             "about:blank",
-                            "--browser=msedge",
+                            f"--browser={browser}",
                             "--persistent",
                             f"--profile={directory / profile}",
                         )
@@ -217,16 +217,21 @@ def capture(rounds):
             for server in servers.values():
                 server.shutdown()
                 server.server_close()
-    return {"payload_sha256": hashlib.sha256(PAYLOAD).hexdigest(), "trials": output}
+    return {
+        "browser": browser,
+        "payload_sha256": hashlib.sha256(PAYLOAD).hexdigest(),
+        "trials": output,
+    }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--browser", choices=("msedge", "chrome"), default="msedge")
     parser.add_argument("--rounds", type=int, choices=range(1, 5), default=3)
     args = parser.parse_args()
     if args.output.exists():
         parser.error("output already exists")
-    capture_result = capture(args.rounds)
+    capture_result = capture(args.rounds, args.browser)
     with args.output.open("x", encoding="utf-8") as output:
         json.dump(capture_result, output, indent=2)

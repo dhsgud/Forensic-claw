@@ -11,16 +11,21 @@ Report costs in comparable positive integer units. An observed value that no rem
 
 ## Reproduce the evaluation
 
-The normalized rows in `browser-records.json` were captured on Windows 11 build 26300 with Edge 158.0.4370.33 and Playwright CLI 0.1.25 on 2026-11-26 UTC. The browser profiles are temporary. The capture script starts three loopback HTTP listeners, sends an identical harmless text attachment from two origins, and reads the temporary Edge History SQLite database after each profile closes. The shipped rows retain a profile alias, download row ID, state, byte count, digest, redirect category, terminal origin and server observation.
+On 2026-11-26 UTC, Playwright CLI 0.1.25 captured 24 downloads per browser on Windows 11 build 26300. `browser-records.json` contains the Microsoft Edge 158.0.4370.33 records, and `chrome-records.json` contains the Google Chrome 157.0.8103.79 records. The browser profiles are temporary. The capture script starts three loopback HTTP listeners, sends an identical harmless text attachment from two origins, and reads the temporary browser History SQLite database after each profile closes. The shipped rows retain a profile alias, download row ID, state, byte count, digest, redirect category, terminal origin and server observation.
 
 From the repository root with project dependencies installed:
 
 ```powershell
-py -3.12 research/next_evidence/capture_browser.py browser-replication.json --rounds 3
-py -3.12 -m research.next_evidence.benchmark research/next_evidence/browser-records.json comparison-replication.json
+py -3.12 research/next_evidence/capture_browser.py edge-replication.json --browser msedge --rounds 3
+py -3.12 research/next_evidence/capture_browser.py chrome-replication.json --browser chrome --rounds 3
+py -3.12 -m research.next_evidence.benchmark research/next_evidence/browser-records.json edge-comparison-replication.json
+py -3.12 -m research.next_evidence.benchmark research/next_evidence/chrome-records.json chrome-comparison-replication.json
+py -3.12 -m research.next_evidence.pi_baseline research/next_evidence/chrome-records.json chrome-pi-replication.json --recorded research/next_evidence/pi-results.json
 py -3.12 -m research.next_evidence.pi_baseline research/next_evidence/browser-records.json pi-replication.json
 ```
 
-Browser capture requires Edge, Node.js and npm. The Pi experiment requires the [NVIDIA QAD checkpoint](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4-QAD) `nvidia/Qwen3.8-Flash-Next-NVFP4-QAD`, configured in Pi under the alias `llamacpp/coder390`. The deterministic replay uses the captured rows as an observation oracle, with explicitly modeled query costs and availability. The first batch tunes the fixed order. The last two batches repeat the acquisition on new profiles. The replay evaluates two predicates over the same acquired records and does not measure wall-clock acquisition or field performance. Pi generates a contingent policy without access to held-out outcomes, then uses the same verdict checker as the four deterministic methods. In the standard scenario the recorded response mixed prose with a single valid JSON block. The strict result is retained and replay of that block is stored separately as `recovered_rows`.
+Browser capture requires the selected browser, Node.js and npm. The Pi experiment requires the [NVIDIA QAD checkpoint](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4-QAD) `nvidia/Qwen3.8-Flash-Next-NVFP4-QAD`, configured in Pi under the alias `llamacpp/coder390`. The deterministic replay uses the captured rows as an observation oracle, with explicitly modeled query costs and availability. The first batch tunes the fixed order. The last two batches repeat the acquisition on new profiles. The replay evaluates two predicates over the same acquired records and does not measure wall-clock acquisition or field performance. Pi generates a contingent policy without access to held-out outcomes, then uses the same verdict checker as the four deterministic methods. In the standard scenario the recorded response mixed prose with a single valid JSON block. The strict result is retained and replay of that block is stored separately as `recovered_rows`.
 
 `results.json` contains counts, per-trial outcomes and the query sequence. Run `py -3.12 -m research.next_evidence.plot_results` with Matplotlib installed to regenerate the manuscript figure from those results.
+
+Each browser has 1,280 policy replay rows. `chrome-results.json` reproduces the Edge results in `results.json`; the normalized observation rows match across browsers. `chrome-pi-replay.json` applies the previously recorded responses to the Chrome holdout without calling the model again.

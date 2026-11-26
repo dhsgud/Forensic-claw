@@ -1,0 +1,239 @@
+{
+  "standard": {
+    "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
+    "budget": 3,
+    "error": "invalid JSON",
+    "recovered_rows": [
+      {
+        "trial": "b1-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-6",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-7",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-6",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-7",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 1,
+        "policy_error": null
+      }
+    ]
+  },
+  "split_archives": {
+    "model": "nvidia/Qwen3.8-Flash-Next-NVFP4-QAD",
+    "budget": 3,
+    "rows": [
+      {
+        "trial": "b1-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-6",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b1-7",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-0",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-1",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-2",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-3",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-4",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-5",
+        "truth": "refuted",
+        "verdict": "refuted",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-6",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      },
+      {
+        "trial": "b2-7",
+        "truth": "supported",
+        "verdict": "supported",
+        "spent": 3,
+        "policy_error": null
+      }
+    ]
+  }
+}
